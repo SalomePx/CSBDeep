@@ -8,6 +8,7 @@ import sys, os, warnings
 
 from tqdm import tqdm
 import math
+import matplotlib.pyplot as plt
 from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice
 from ..utils.six import Path
 from ..io import save_training_data
@@ -101,15 +102,7 @@ def sample_patches_from_multiple_stacks(datas, patch_size, n_samples, datas_mask
         raise ValueError("'patch_filter' didn't return any region to sample from")
 
     sample_inds = choice(range(n_valid), n_samples, replace=(n_valid < n_samples))
-
-    # valid_inds = [v + s.start for s, v in zip(border_slices, valid_inds)] # slow for large n_valid
-    # rand_inds = [v[sample_inds] for v in valid_inds]
     rand_inds = [v[sample_inds] + s.start for s, v in zip(border_slices, valid_inds)]
-
-    # res = [np.stack([data[r[0] - patch_size[0] // 2:r[0] + patch_size[0] - patch_size[0] // 2,
-    #                  r[1] - patch_size[1] // 2:r[1] + patch_size[1] - patch_size[1] // 2,
-    #                  r[2] - patch_size[2] // 2:r[2] + patch_size[2] - patch_size[2] // 2,
-    #                  ] for r in zip(*rand_inds)]) for data in datas]
 
     res = [np.stack([data[tuple(slice(_r-(_p//2),_r+_p-(_p//2)) for _r,_p in zip(r,patch_size))] for r in zip(*rand_inds)]) for data in datas]
     return res
