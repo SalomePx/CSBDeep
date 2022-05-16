@@ -622,7 +622,7 @@ def create_patches_mito(
     list_image_pair = list(enumerate(image_pairs))
     image_pair_iter = list_image_pair[:]
     for _, (x, y, _axes, mask) in image_pair_iter:
-        if x.shape[0]>=patch_size[0] or x.shape[1]>=patch_size[1]:
+        if x.shape[0]>=patch_size[0] and x.shape[1]>=patch_size[1]:
             # Calculate the number of patches per image and total final images
             n_patches_height = math.ceil(x.shape[0] / patch_size[0])
             n_patches_width = math.ceil(x.shape[1] / patch_size[1])
@@ -653,7 +653,7 @@ def create_patches_mito(
             ValueError('extracted patches must contain all channels.'))
 
         # If image is big enough
-        if x.shape[0]>=patch_size[0] or x.shape[1]>=patch_size[1]:
+        if x.shape[0]>=patch_size[0] and x.shape[1]>=patch_size[1]:
             # Calculate the number of patches per image and total final images
             n_patches_height = math.ceil(x.shape[0] / patch_size[0])
             n_patches_width = math.ceil(x.shape[1] / patch_size[1])

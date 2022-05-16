@@ -68,9 +68,9 @@ class CARE(BaseModel):
         Path to model folder (which stores configuration, weights, etc.)
     """
 
-    def __init__(self, config, name=None, basedir='.'):
+    def __init__(self, config, name=None, basedir='.', name_weights=None):
         """See class docstring."""
-        super(CARE, self).__init__(config=config, name=name, basedir=basedir)
+        super(CARE, self).__init__(config=config, name=name, basedir=basedir, name_weights=name_weights)
 
 
     def _build(self):

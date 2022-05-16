@@ -84,7 +84,7 @@ class BaseModel(object):
             get_registered_models(cls, verbose=True)
 
 
-    def __init__(self, config, name=None, basedir='.'):
+    def __init__(self, config, name=None, basedir='.', name_weights=None):
         """See class docstring."""
 
         config is None or isinstance(config,self._config_class) or _raise (
@@ -110,7 +110,7 @@ class BaseModel(object):
         self._model_prepared = False
         self.keras_model = self._build()
         if config is None:
-            self._find_and_load_weights()
+            self._find_and_load_weights(prefer=name_weights)
 
 
     def __repr__(self):
@@ -151,7 +151,7 @@ class BaseModel(object):
 
 
     @suppress_without_basedir(warn=False)
-    def _find_and_load_weights(self,prefer='best'):
+    def _find_and_load_weights(self, prefer='best', name=None):
         from itertools import chain
         # get all weight files and sort by modification time descending (newest first)
         weights_ext   = ('*.h5','*.hdf5')
@@ -164,7 +164,11 @@ class BaseModel(object):
         weights_preferred = list(filter(lambda f: prefer in f.name, weights_files))
         weights_chosen = weights_preferred[0] if len(weights_preferred)>0 else weights_files[0]
         print("Loading network weights from '%s'." % weights_chosen.name)
-        self.load_weights(weights_chosen.name)
+        if name is None:
+            self.load_weights(weights_chosen.name)
+        else:
+            self.load_weights(name)
+
 
 
     @abstractmethod
@@ -181,6 +185,7 @@ class BaseModel(object):
         name : str
             Name of HDF5 weight file (as saved during or after training).
         """
+        print(str(self.logdir/name))
         self.keras_model.load_weights(str(self.logdir/name))
 
 

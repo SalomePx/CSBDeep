@@ -8,6 +8,9 @@ import platform
 import random
 from six.moves import range, zip, map, reduce, filter
 from .six import Path
+import matplotlib.pyplot as plt
+from zipfile import ZipFile
+import shutil
 
 ###
 
@@ -62,7 +65,6 @@ def normalize_mi_ma(x, mi, ma, clip=False, eps=1e-20, dtype=np.float32):
         mi  = dtype(mi) if np.isscalar(mi) else mi.astype(dtype,copy=False)
         ma  = dtype(ma) if np.isscalar(ma) else ma.astype(dtype,copy=False)
         eps = dtype(eps)
-
     try:
         import numexpr
         x = numexpr.evaluate("(x - mi) / ( ma - mi + eps )")
@@ -71,7 +73,6 @@ def normalize_mi_ma(x, mi, ma, clip=False, eps=1e-20, dtype=np.float32):
 
     if clip:
         x = np.clip(x,0,1)
-
     return x
 
 
@@ -183,6 +184,28 @@ def download_and_extract_zip_file(url, targetdir='.', verbose=True):
         log('\n'+str(targetdir)+':')
         consume(map(lambda x: log('-',Path(x)), provided))
 
+############################################# MITOCHONDRIES FILES #####################################################
+
+def extract_zip_file(folder_path, targetdir='data_mito', zip=False):
+
+    # TODO : watch if folder is replaced when existing
+    if zip:
+        try:
+            log('Files missing, extracting...', end='')
+            with ZipFile(folder_path, 'r') as zip:
+                zip.extractall(str(targetdir))
+                print(' done.')
+        except:
+            shutil.rmtree(targetdir)
+            with ZipFile(folder_path, 'r') as zip:
+                zip.extractall(str(targetdir))
+                print(' done.')
+    else:
+        try:
+            shutil.copytree(folder_path, targetdir)
+        except:
+            shutil.rmtree(targetdir)
+            shutil.copytree(folder_path, targetdir)
 
 ###
 
@@ -272,3 +295,11 @@ def choice(population, k=1, replace=True):
         finally:
             # restore state of 'random'
             random.setstate(state)
+
+def save_figure(moment, datatype):
+    if not os.path.isdir('fig/'):
+        os.makedirs('fig/')
+    if not os.path.isdir('fig/' + moment + '/'):
+        os.makedirs('fig/' + moment + '/')
+    file_name = 'fig/' + moment + '/' + datatype + '.jpg'
+    plt.savefig(file_name)
