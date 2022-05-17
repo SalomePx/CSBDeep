@@ -7,7 +7,7 @@ import numpy as np
 import os
 
 
-def create_noised_inputs(data_path, gaussian_blur, gaussian_noise, poisson_noise):
+def create_noised_inputs(data_path, gaussian_blur, gaussian_noise, poisson_noise=False):
     """Create normalized training data to be used for neural network training.
 
     Parameters
@@ -42,7 +42,6 @@ def create_noised_inputs(data_path, gaussian_blur, gaussian_noise, poisson_noise
             # Apply noises
             if gaussian_filter:
                 img_noised = gaussian_filter(img_noised, sigma=gaussian_blur)
-                #img_noised = img_noised.filter(ImageFilter.GaussianBlur(radius = gaussian_filter))
             if gaussian_noise is not None:
                 if img_noised.ndim == 3:
                     row, col, ch = img_noised.shape
@@ -56,10 +55,13 @@ def create_noised_inputs(data_path, gaussian_blur, gaussian_noise, poisson_noise
                 if img_noised.ndim == 2:
                     gauss = gauss.squeeze()
                 img_noised = img_noised + gauss
+            '''
             if poisson_noise:
                 vals = len(np.unique(img_noised))
                 vals = 2 ** np.ceil(np.log2(vals))
                 img_noised = np.random.poisson(img_noised * vals) / float(vals)
+            
+            if poisson_noise:
+                img_noised = imnoise(img_noised, 'poisson')'''
 
             cv2.imwrite(img_noised_path, img_noised)
-            #img_noised.save(img_noised_path)
