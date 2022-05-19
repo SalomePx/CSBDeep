@@ -1,24 +1,23 @@
-from PIL import Image, ImageFilter
 from scipy.ndimage.filters import gaussian_filter
-import cv2
-
-
+from PIL import Image, ImageFilter
 import numpy as np
+import tqdm
+import cv2
+import sys
 import os
 
 
-def create_noised_inputs(data_path, gaussian_blur, gaussian_noise, poisson_noise=False):
+def create_noised_inputs(data_path, gaussian_blur, gaussian_sigma, poisson_noise=False):
     """Create normalized training data to be used for neural network training.
 
     Parameters
     ----------
     data_path : str
         Path of folder where are saved data (training and testing)
-    gaussian_filter : float: 0 if no gaussian filter, gaussian filter otherwise
+    gaussian_blur : float: 0 if no gaussian filter, gaussian filter otherwise
         Provide gaussian filter to the image for low resolution dataset
-    gaussian_noise : tuple (mean, var)
-        Provide gaussian noise to the image for low resolution dataset
-        If not, then tuple = None
+    gaussian_sigma : int std
+        Provide gaussian sigma noise (standard deviation) to the image for low resolution dataset
     poisson_noise : float: 0 if no gaussian filter, poisson noise otherwise
         Provide poisson noise to the image for low resolution dataset
 
@@ -30,38 +29,29 @@ def create_noised_inputs(data_path, gaussian_blur, gaussian_noise, poisson_noise
     """
 
     folders = os.listdir(data_path)
-    for folder in folders: #train et test
+    print(f"Creating perturbated images... ")
+
+    for i, folder in enumerate(folders):
 
         files = os.listdir(data_path + "/" + folder + "/GT")
-        for file in files:
+        print(f"Extracting folder {i+1}/{len(folders)}\n", end='\r')
+
+        for j, file in enumerate(files):
+            print(f"Adding noise to image {j + 1}/{len(files)}", end='\r')
+
             img_path = data_path + "/" + folder + "/GT/" + file
             img_noised_path = data_path + "/" + folder + "/low/" + file
             img = Image.open(img_path)
-            img_noised = np.array(img)
+            img = np.array(img)
+            img_noised = img.copy()
 
             # Apply noises
             if gaussian_filter:
                 img_noised = gaussian_filter(img_noised, sigma=gaussian_blur)
-            if gaussian_noise is not None:
-                if img_noised.ndim == 3:
-                    row, col, ch = img_noised.shape
-                else:
-                    row, col = img_noised.shape
-                    ch = 1
-                mean, var = gaussian_noise
-                sigma = var ** 0.5
-                gauss = np.random.normal(mean, sigma, (row, col, ch))
-                gauss = gauss.reshape(row, col, ch)
-                if img_noised.ndim == 2:
-                    gauss = gauss.squeeze()
-                img_noised = img_noised + gauss
-            '''
+            if gaussian_sigma is not None:
+                noise = np.random.normal(0, gaussian_sigma, size=img_noised.shape).astype(np.float32)
+                img_noised = np.maximum(0, img_noised + noise)
             if poisson_noise:
-                vals = len(np.unique(img_noised))
-                vals = 2 ** np.ceil(np.log2(vals))
-                img_noised = np.random.poisson(img_noised * vals) / float(vals)
-            
-            if poisson_noise:
-                img_noised = imnoise(img_noised, 'poisson')'''
+                img_noised = np.random.poisson(np.maximum(0, img_noised).astype(np.int)).astype(np.float32)
 
             cv2.imwrite(img_noised_path, img_noised)

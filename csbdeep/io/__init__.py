@@ -101,6 +101,8 @@ def load_training_data(file, validation_split=0, axes=None, n_images=None, verbo
     if validation_split > 0:
         n_val   = int(round(n_images * validation_split))
         n_train = n_images - n_val
+        print(n_val)
+        print(n_train)
         assert 0 < n_val and 0 < n_train
         X_t, Y_t = X[-n_val:],  Y[-n_val:]
         X,   Y   = X[:n_train], Y[:n_train]

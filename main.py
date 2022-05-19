@@ -19,11 +19,18 @@ from csbdeep.utils.tf import limit_gpu_memory
 from csbdeep.io import load_training_data, save_tiff_imagej_compatible
 from csbdeep.models import Config, CARE
 
-mito = False
-care_noise = True
+# ----------------------------------------------
+# -------- Global parameters settings ----------
+# ----------------------------------------------
+initial_care = False
+save_fig = True
 load = False
+build_data = False
+data_dir = 'data_care'
 
-### Keep time
+# -----------------------------
+# -------- Keep time ----------
+# -----------------------------
 date = datetime.datetime.now()
 month = date.month
 day = date.day
@@ -31,24 +38,29 @@ hour = date.hour
 min = date.minute
 moment = str(month) + '-' + str(day) + '_' +  str(hour) + '-' + str(min)
 
-if mito:
-    ### Extract zip file
-    extract_zip_file (
-        folder_path = '/net/serpico-fs2/spapereu/data_mito',
-        targetdir   = 'data_mito',
-    )
+# -----------------------------------------------------
+# -------- Analysis with our patches method -----------
+# -----------------------------------------------------
+if not initial_care:
 
-    ### Create noised images
-    create_noised_inputs(
-        data_path       = 'data_mito',
-        gaussian_blur   = 3,
-        gaussian_noise  = (0,5),
-        poisson_noise   = False,
-    )
+    if build_data:
+        ### Extract zip file
+        extract_zip_file (
+            folder_path = '/net/serpico-fs2/spapereu/' + data_dir,
+            targetdir   = data_dir,
+        )
+
+        ### Create noised images
+        create_noised_inputs(
+            data_path       = data_dir,
+            gaussian_blur   = 3,
+            gaussian_sigma  = 5,
+            poisson_noise   = False,
+        )
 
     ### Generate training data
     raw_data = RawData.from_folder (
-        basepath    = 'data_mito/train',
+        basepath    = data_dir + '/train',
         source_dirs = ['low'],
         target_dir  = 'GT',
         axes        = 'YX',
@@ -59,51 +71,17 @@ if mito:
         raw_data            = raw_data,
         patch_size          = (128,128),
         patch_filter        = no_background_patches(0),
-        save_file           = 'data/my_training_data_mito.npz',
+        save_file           = data_dir + '/my_training_' + data_dir + '.npz',
     )
 
     ### Split into training and validation data
-    (X, Y), (X_val, Y_val), axes = load_training_data('data/my_training_data_mito.npz', validation_split=0.05, verbose=True)
+    (X, Y), (X_val, Y_val), axes = load_training_data(data_dir + '/my_training_' + data_dir + '.npz', validation_split=0.05, verbose=True)
     c = axes_dict(axes)['C']
     n_channel_in, n_channel_out = X.shape[c], Y.shape[c]
 
-elif care_noise:
-    ### Extract zip file
-    extract_zip_file (
-        folder_path = '/net/serpico-fs2/spapereu/data_care',
-        targetdir   = 'data_care',
-    )
-
-    ### Create noised images
-    create_noised_inputs(
-        data_path       = 'data_care',
-        gaussian_blur   = 0,
-        gaussian_noise  = (0,5),
-        poisson_noise   = False,
-    )
-
-    ### Generate training data
-    raw_data = RawData.from_folder (
-        basepath    = 'data_care/train',
-        source_dirs = ['low'],
-        target_dir  = 'GT',
-        axes        = 'YX',
-    )
-
-    ### Creation of patches
-    X, Y, XY_axes = create_patches_mito (
-        raw_data            = raw_data,
-        patch_size          = (128,128),
-        patch_filter        = no_background_patches(0),
-        save_file           = 'data/my_training_data_care.npz',
-    )
-
-    ### Split into training and validation data
-    (X, Y), (X_val, Y_val), axes = load_training_data('data/my_training_data_care.npz', validation_split=0.05, verbose=True)
-    c = axes_dict(axes)['C']
-    n_channel_in, n_channel_out = X.shape[c], Y.shape[c]
-
-
+# ----------------------------------------------------
+# -------- Analysis with CARE patch method -----------
+# ----------------------------------------------------
 else:
     ### Download and extract zip file
     download_and_extract_zip_file(
@@ -133,9 +111,13 @@ else:
     c = axes_dict(axes)['C']
     n_channel_in, n_channel_out = X.shape[c], Y.shape[c]
 
+
+# ----------------------------------
+# -------- Train a model -----------
+# ----------------------------------
 if not load:
     ### CARE model
-    config = Config(axes, n_channel_in, n_channel_out, unet_kern_size=3, train_batch_size=2, train_steps_per_epoch=400)
+    config = Config(axes, n_channel_in, n_channel_out, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=40)
     print(config)
     vars(config)
     model = CARE(config, 'my_model', basedir='models')
@@ -148,10 +130,20 @@ if not load:
     plot_history(history,['loss','val_loss'],['mse','val_mse','mae','val_mae']);
     save_figure(moment, 'history')
 
-if True:
-    y = imread('data_care/test/GT/img_0001.tif')
-    x = imread('data_care/test/low/img_0002.tif')
+# -----------------------------------------------
+# -------- Save plots and loss images -----------
+# -----------------------------------------------
+if save_fig:
     axes = 'YX'
+    if initial_care:
+        y = imread('data/test/GT/img_0001.tif')
+        x = imread('data/test/low/img_0001.tif')
+    elif 'care' in data_dir:
+        y = imread('data_care/test/GT/img_0001.tif')
+        x = imread('data_care/test/low/img_0001.tif')
+    else:
+        y = imread('data_mito/test/GT/IMG0052.STED.ome.tif')
+        x = imread('data_mito/test/low/IMG0052.STED.ome.tif')
 
     ### Load model
     model = CARE(config=None, name='my_model', basedir='models', name_weights='last')
@@ -164,15 +156,13 @@ if True:
               pmin=2, pmax=99.8);
     save_figure(moment, '1pred')
 
+    ### Watch signal per pixel
     plt.figure(figsize=(10, 5))
     for _x, _name in zip((x, restored, y), ('low', 'CARE', 'GT')):
         plt.plot(normalize(_x, 1, 99.7)[180], label=_name, lw=2)
     plt.legend()
-    save_figure(moment, 'loss')
+    save_figure(moment, 'pixel_loss')
 
-
-
-if True:
     ### Evaluation
     plt.figure(figsize=(20,12))
     _P = model.keras_model.predict(X_val[:5])
@@ -183,17 +173,18 @@ if True:
                 'top row: input (source),  '          
                 'middle row: target (ground truth),  '
                 'bottom row: predicted from source');
-
     save_figure(moment, '5preds')
+
     ### SAVE model
     model.export_TF()
 
+# ---------------------------------
+# -------- Load a model -----------
+# ---------------------------------
 if load:
     ### Load images
-    #y = imread('data_mito/test/GT/IMG0052.STED.ome.tif')
-    #x = imread('data_mito/test/low/IMG0052.STED.ome.tif')
     y = imread('data_care/test/GT/img_0001.tif')
-    x = imread('data_care/test/low/img_0002.tif')
+    x = imread('data_care/test/low/img_0001.tif')
     axes = 'YX'
 
     ### Load model

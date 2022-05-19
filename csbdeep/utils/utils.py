@@ -11,6 +11,7 @@ from .six import Path
 import matplotlib.pyplot as plt
 from zipfile import ZipFile
 import shutil
+import cv2
 
 ###
 
@@ -85,7 +86,6 @@ def normalize_minmse(x, target):
 
 
 ###
-
 
 def _raise(e):
     if isinstance(e, BaseException):
@@ -296,6 +296,7 @@ def choice(population, k=1, replace=True):
             # restore state of 'random'
             random.setstate(state)
 
+
 def save_figure(moment, datatype):
     if not os.path.isdir('fig/'):
         os.makedirs('fig/')
@@ -303,3 +304,15 @@ def save_figure(moment, datatype):
         os.makedirs('fig/' + moment + '/')
     file_name = 'fig/' + moment + '/' + datatype + '.jpg'
     plt.savefig(file_name)
+
+
+def save_patch(save_name, datas):
+    x, y = datas
+
+    path_save_x = 'patches/train/GT/' + save_name
+    cv2.imwrite(path_save_x, x)
+
+    path_save_y = 'patches/train/low/' + save_name
+    cv2.imwrite(path_save_y, y)
+
+

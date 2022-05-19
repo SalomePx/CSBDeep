@@ -3,22 +3,24 @@ from __future__ import print_function, unicode_literals, absolute_import, divisi
 from six.moves import range, zip, map, reduce, filter
 from six import string_types
 
-import numpy as np
+from matplotlib import pyplot as plt
+import matplotlib.pyplot as plt
 import sys, os, warnings
 
 from tqdm import tqdm
+import numpy as np
+import shutil
+from PIL import Image
 import math
-import matplotlib.pyplot as plt
-from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice
+import cv2
+
+from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice, save_patch
+from .transform import Transform, permute_axes, broadcast_target
 from ..utils.six import Path
 from ..io import save_training_data
 
-from .transform import Transform, permute_axes, broadcast_target
-
-
 
 ## Patch filter
-
 def no_background_patches(threshold=0.4, percentile=99.9):
 
     """Returns a patch filter to be used by :func:`create_patches` to determine for each image pair which patches
@@ -484,7 +486,7 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, datas_mask=None, p
         patch_mask &= minimum_filter(datas_mask, patch_size, mode='constant', cval=False)
 
     # Create patches
-    x,y = datas
+    y,x = datas
     patches_x = []
     patches_y = []
     n_height, n_width = n_sample_size
@@ -517,8 +519,12 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, datas_mask=None, p
                 end_width = j * patch_size[1] + patch_size[1]
                 patch_x, patch_y = x[start_height:end_height, start_width:end_width], y[start_height:end_height, start_width:end_width]
 
-            patches_x.append(patch_x.tolist())
-            patches_y.append(patch_y.tolist())
+            # Check whether patch is valid or not : contains enough relevant information for training
+            # Delete or add it
+            patch_grey = cv2.cvtColor(patch_x, cv2.COLOR_RGB2BGR)
+            if patch_is_valid(patch_grey):
+                patches_x.append(patch_x.tolist())
+                patches_y.append(patch_y.tolist())
 
     return np.array(patches_y), np.array(patches_x)
 
@@ -531,7 +537,7 @@ def create_patches_mito(
         patch_filter  = no_background_patches(),
         save_file     = None,
         normalization = norm_percentiles(),
-        shuffle       = True,
+        shuffle       = False,
         verbose       = True,
     ):
     """Create normalized training data to be used for neural network training.
@@ -540,9 +546,6 @@ def create_patches_mito(
     ----------
     raw_data : :class:`RawData`
         Object that yields matching pairs of raw images.
-    randomization :
-        Take a random part of the image of size 256x256
-        Default True
     patch_axes : str or None
         Axes of the extracted patches. If ``None``, will assume to be equal to that of transformed raw data.
     patch_size : tuple
@@ -612,16 +615,15 @@ def create_patches_mito(
         print('Patch size:')
         print(" x ".join(str(p) for p in patch_size))
         print('=' * 66)
-
     sys.stdout.flush()
-
-    ## TODO : randomization
 
     # Calculate number of final images
     n_patches = 0
     list_image_pair = list(enumerate(image_pairs))
     image_pair_iter = list_image_pair[:]
-    for _, (x, y, _axes, mask) in image_pair_iter:
+    for iter, (x, y, _axes, mask) in image_pair_iter:
+        if iter < 20 :
+            cv2.imwrite('tests/image_'+ str(iter) + '.jpg', x)
         if x.shape[0]>=patch_size[0] and x.shape[1]>=patch_size[1]:
             # Calculate the number of patches per image and total final images
             n_patches_height = math.ceil(x.shape[0] / patch_size[0])
@@ -630,16 +632,31 @@ def create_patches_mito(
             n_patches += n_patch_per_image
 
     # Memory check
-    n_required_memory_bytes = n_patches * np.prod(patch_size) * 4
+    n_required_memory_bytes = n_patches * np.prod(patch_size)
     _memory_check(n_required_memory_bytes)
 
     # Initialize sampling patches from each pair of transformed raw images
     X = np.empty((n_patches,) + tuple(patch_size), dtype=np.float32)
     Y = np.empty_like(X)
 
+    # Create directory where to save files
+    try:
+        os.makedirs('patches/')
+        os.makedirs('patches/train/')
+        os.makedirs('patches/train/GT/')
+        os.makedirs('patches/train/low')
+    except:
+        shutil.rmtree('patches')
+        os.makedirs('patches/')
+        os.makedirs('patches/train/')
+        os.makedirs('patches/train/GT/')
+        os.makedirs('patches/train/low')
+
     # Create patches for each image
     occupied = 0
-    for i, (x, y, _axes, mask) in tqdm(list_image_pair, total=n_patches ,disable=(not verbose)):
+    file_number = 0
+    print("Building data patches...")
+    for i, (x, y, _axes, mask) in tqdm(list_image_pair, total=len(list_image_pair), disable=(not verbose)):
         if i == 0:
             axes = axes_check_and_normalize(_axes, len(patch_size))
             channel = axes_dict(axes)['C']
@@ -654,18 +671,38 @@ def create_patches_mito(
 
         # If image is big enough
         if x.shape[0]>=patch_size[0] and x.shape[1]>=patch_size[1]:
-            # Calculate the number of patches per image and total final images
-            n_patches_height = math.ceil(x.shape[0] / patch_size[0])
-            n_patches_width = math.ceil(x.shape[1] / patch_size[1])
-            n_patches_per_image = n_patches_height * n_patches_width
-
             # Create patches
             _Y, _X = sample_patches_in_image((y, x), patch_size, (n_patches_height, n_patches_width), mask, patch_filter)
+
+            # Calculate the number of patches per image
+            n_patches_per_image = len(_X)
 
             # Fulfill final container of images with patches
             s = slice(occupied, occupied + n_patches_per_image)
             X[s], Y[s] = normalization(_X, _Y, x, y, mask, channel)
+
+            # Save image if one patch at least is deleted (to check selection mechanism)
+            n_patches_height = math.ceil(x.shape[0] / patch_size[0])
+            n_patches_width = math.ceil(x.shape[1] / patch_size[1])
+            max_patches_per_image = n_patches_height * n_patches_width
+            if max_patches_per_image > n_patches_per_image:
+                cv2.imwrite("todelete/PATCH_" + str(i) + '.jpg', x)
+
+            # Saving patches in folder patches
+            for k in range (n_patches_per_image):
+                x, y = X[occupied + k], Y[occupied + k]
+                datas = (x,y)
+                try:
+                    patch_file_name = 'PATCH' + str(file_number) + '.STED.ome.tif'
+                except:
+                    patch_file_name = 'PATCH' + str(file_number) + '.tif'
+                save_patch(patch_file_name, datas)
+                file_number += 1
+
             occupied += n_patches_per_image
+
+    X = X[:occupied]
+    Y = Y[:occupied]
 
     if shuffle:
         shuffle_inplace(X, Y)
@@ -682,6 +719,29 @@ def create_patches_mito(
         print('Saving data to %s.' % str(Path(save_file)))
         save_training_data(save_file, X, Y, axes)
 
-    print(f"There are {n_patches} final images for training.")
+    print(f"There are {len(X)} final images for training.")
     return X, Y, axes
+
+
+def patch_is_valid(image):
+    """ Check whether a patch contains too much noise, or not enough relevant information, which could bias the training
+    Parameters
+    ----------
+        image : a numpy array image
+    Returns
+    -------
+        True if the patch is kept for training, False otherwise
+    """
+    # Calculate histogram of saturation channel
+    s = cv2.calcHist([image], [0], None, [256], [0, 256])
+
+    # Calculate percentage of pixels with saturation >= p
+    p = 0.05
+    s_perc = np.sum(s[int(p * 255):-1]) / np.prod(image.shape[0:2])
+
+    # Percentage threshold; above: valid image, below: noise
+    s_thr = 0.1
+    if not s_perc > s_thr:
+        print(s_perc)
+    return s_perc > s_thr
 
