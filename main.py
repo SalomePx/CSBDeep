@@ -117,7 +117,7 @@ else:
 # ----------------------------------
 if not load:
     ### CARE model
-    config = Config(axes, n_channel_in, n_channel_out, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=40)
+    config = Config(axes, n_channel_in, n_channel_out, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=200)
     print(config)
     vars(config)
     model = CARE(config, 'my_model', basedir='models')

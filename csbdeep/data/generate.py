@@ -14,7 +14,7 @@ from PIL import Image
 import math
 import cv2
 
-from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice, save_patch
+from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice, save_patch, normalize
 from .transform import Transform, permute_axes, broadcast_target
 from ..utils.six import Path
 from ..io import save_training_data
@@ -467,7 +467,7 @@ def shuffle_inplace(*arrs,**kwargs):
 
 ########################################## MITOCHONDRIES PART ##########################################
 
-def sample_patches_in_image(datas, patch_size, n_sample_size, datas_mask=None, patch_filter=None, verbose=False):
+def sample_patches_in_image(datas, patch_size, n_sample_size, cpt, datas_mask=None, patch_filter=None, verbose=False):
     """ Sample matching patches of size `patch_size` from all arrays in `datas` """
 
     # TODO: checks
@@ -522,11 +522,13 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, datas_mask=None, p
             # Check whether patch is valid or not : contains enough relevant information for training
             # Delete or add it
             patch_grey = cv2.cvtColor(patch_x, cv2.COLOR_RGB2BGR)
-            if patch_is_valid(patch_grey):
+            if patch_is_valid(patch_grey, cpt):
                 patches_x.append(patch_x.tolist())
                 patches_y.append(patch_y.tolist())
 
-    return np.array(patches_y), np.array(patches_x)
+            cpt += 1
+
+    return np.array(patches_y), np.array(patches_x), cpt
 
 
 def create_patches_mito(
@@ -655,6 +657,7 @@ def create_patches_mito(
     # Create patches for each image
     occupied = 0
     file_number = 0
+    cpt = 0
     print("Building data patches...")
     for i, (x, y, _axes, mask) in tqdm(list_image_pair, total=len(list_image_pair), disable=(not verbose)):
         if i == 0:
@@ -672,32 +675,32 @@ def create_patches_mito(
         # If image is big enough
         if x.shape[0]>=patch_size[0] and x.shape[1]>=patch_size[1]:
             # Create patches
-            _Y, _X = sample_patches_in_image((y, x), patch_size, (n_patches_height, n_patches_width), mask, patch_filter)
-
+            _Y, _X, cpt = sample_patches_in_image((y, x), patch_size, (n_patches_height, n_patches_width), cpt, mask, patch_filter)
             # Calculate the number of patches per image
             n_patches_per_image = len(_X)
 
-            # Fulfill final container of images with patches
-            s = slice(occupied, occupied + n_patches_per_image)
-            X[s], Y[s] = normalization(_X, _Y, x, y, mask, channel)
+            # If at least on patch is kept within the image
+            if n_patches_per_image != 0:
 
-            # Save image if one patch at least is deleted (to check selection mechanism)
-            n_patches_height = math.ceil(x.shape[0] / patch_size[0])
-            n_patches_width = math.ceil(x.shape[1] / patch_size[1])
-            max_patches_per_image = n_patches_height * n_patches_width
-            if max_patches_per_image > n_patches_per_image:
-                cv2.imwrite("todelete/PATCH_" + str(i) + '.jpg', x)
+                # Fulfill final container of images with patches
+                s = slice(occupied, occupied + n_patches_per_image)
+                X[s], Y[s] = normalization(_X, _Y, x, y, mask, channel)
 
-            # Saving patches in folder patches
-            for k in range (n_patches_per_image):
-                x, y = X[occupied + k], Y[occupied + k]
-                datas = (x,y)
-                try:
-                    patch_file_name = 'PATCH' + str(file_number) + '.STED.ome.tif'
-                except:
-                    patch_file_name = 'PATCH' + str(file_number) + '.tif'
-                save_patch(patch_file_name, datas)
-                file_number += 1
+                # Save image if one patch at least is deleted (to check selection mechanism)
+                n_patches_height = math.ceil(x.shape[0] / patch_size[0])
+                n_patches_width = math.ceil(x.shape[1] / patch_size[1])
+                max_patches_per_image = n_patches_height * n_patches_width
+
+                # Saving patches in folder patches
+                for k in range (n_patches_per_image):
+                    x, y = X[occupied + k], Y[occupied + k]
+                    datas = (x,y)
+                    try:
+                        patch_file_name = 'PATCH' + str(file_number) + '.STED.ome.tif'
+                    except:
+                        patch_file_name = 'PATCH' + str(file_number) + '.tif'
+                    save_patch(patch_file_name, datas)
+                    file_number += 1
 
             occupied += n_patches_per_image
 
@@ -723,25 +726,33 @@ def create_patches_mito(
     return X, Y, axes
 
 
-def patch_is_valid(image):
+def patch_is_valid(patch, patch_nb, save_deleted_patches = False):
     """ Check whether a patch contains too much noise, or not enough relevant information, which could bias the training
     Parameters
     ----------
-        image : a numpy array image
+        patch : a numpy array image
     Returns
     -------
         True if the patch is kept for training, False otherwise
     """
     # Calculate histogram of saturation channel
-    s = cv2.calcHist([image], [0], None, [256], [0, 256])
+    s = cv2.calcHist([patch], [0], None, [256], [0, 256])
 
-    # Calculate percentage of pixels with saturation >= p
-    p = 0.05
-    s_perc = np.sum(s[int(p * 255):-1]) / np.prod(image.shape[0:2])
+    # Calculate attribute of the histogram
+    pixel_values = np.arange(0, 256)
+    mean_histo = np.sum(s.T * pixel_values) / np.sum(s)
+    max_histo = np.max(s, axis=0)
+    qty_high = np.sum(s[200:])
 
-    # Percentage threshold; above: valid image, below: noise
-    s_thr = 0.1
-    if not s_perc > s_thr:
-        print(s_perc)
-    return s_perc > s_thr
+    #print(f"mean histo : {patch_nb} : {mean_histo}")
+    #print(f"max_histo : {patch_nb} : {max_histo}")
+    #print(f"qty_high : {patch_nb} : {qty_high}")
+
+
+    if (mean_histo < 145 and max_histo > 1000 and qty_high < 210) or qty_high == 0.0 or mean_histo>240:
+        if save_deleted_patches:
+            cv2.imwrite('todelete/deletedPatch_' + str(patch_nb) + '.png', patch)
+        return False
+
+    return True
 
