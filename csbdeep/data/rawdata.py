@@ -82,7 +82,7 @@ class RawData(namedtuple('RawData' ,('generator' ,'size' ,'description'))):
 
         """
         p = Path(basepath)
-        pairs = [(f, p/target_dir/f.name) for f in chain(*((p/source_dir).glob(pattern) for source_dir in source_dirs))]
+        pairs = [(f, p/target_dir/f.name) for f in sorted(chain(*((p/source_dir).glob(pattern) for source_dir in source_dirs)))]
         len(pairs) > 0 or _raise(FileNotFoundError("Didn't find any images."))
         consume(t.exists() or _raise(FileNotFoundError(t)) for s,t in pairs)
         axes = axes_check_and_normalize(axes)

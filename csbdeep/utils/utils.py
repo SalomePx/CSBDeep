@@ -309,10 +309,10 @@ def save_figure(moment, datatype):
 def save_patch(save_name, datas):
     x, y = datas
 
-    path_save_x = 'patches/train/GT/' + save_name
+    path_save_x = 'patches/train/low/' + save_name
     cv2.imwrite(path_save_x, x)
 
-    path_save_y = 'patches/train/low/' + save_name
+    path_save_y = 'patches/train/GT/' + save_name
     cv2.imwrite(path_save_y, y)
 
 

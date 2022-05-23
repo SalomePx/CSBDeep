@@ -159,7 +159,7 @@ def anisotropic_distortions(
         return _normalize_data
 
 
-    def _scale_down_up(data,subsample):
+    def _scale_down_up(data, subsample=0.5):
         from scipy.ndimage.interpolation import zoom
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
@@ -382,3 +382,58 @@ def broadcast_target(target_axes=None):
             yield x, np.broadcast_to(y,x.shape), axes_x, mask
 
     return Transform('Broadcast target image to the shape of source', _generator, 1)
+
+def flip_vertical(axes):
+    axes = axes_check_and_normalize(axes)
+    def _generator(inputs):
+        for x, y, axes_in, mask in inputs:
+            x = np.fliplr(x)
+            y = np.fliplr(y)
+            yield x, y, axes, mask
+
+    return Transform('Flipped images %s' % axes, _generator, 1)
+
+
+def flip_90(axes):
+    axes = axes_check_and_normalize(axes)
+    def _generator(inputs):
+        for x, y, axes_in, mask in inputs:
+            x = np.rot90(x)
+            y = np.rot90(y)
+            yield x, y, axes, mask
+
+    return Transform('Flipped images of 90 %s' % axes, _generator, 1)
+
+def flip_180(axes):
+    axes = axes_check_and_normalize(axes)
+    def _generator(inputs):
+        for x, y, axes_in, mask in inputs:
+            x = np.rot90(x, k=2)
+            y = np.rot90(y, k=2)
+            yield x, y, axes, mask
+
+    return Transform('Flipped images of 180 %s' % axes, _generator, 1)
+
+def flip_270(axes):
+    axes = axes_check_and_normalize(axes)
+    def _generator(inputs):
+        for x, y, axes_in, mask in inputs:
+            x = np.rot90(x, k=3)
+            y = np.rot90(y, k=3)
+            yield x, y, axes, mask
+
+    return Transform('Flipped images of 270 %s' % axes, _generator, 1)
+
+'''
+def _scale_down_up(data, subsample=0.5):
+    from scipy.ndimage.interpolation import zoom
+    y, x = data 
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        factor = np.ones(data.ndim)
+        factor[0] = subsample
+        x = zoom(zoom(x, 1/factor, order=0),
+                                 factor, order=zoom_order)
+        y = zoom(zoom(y, 1 / factor, order=0),
+                 factor, order=zoom_order)
+    return Transform('Zoomed images %s' % axes, _generator, 1)'''

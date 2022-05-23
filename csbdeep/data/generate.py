@@ -465,7 +465,7 @@ def shuffle_inplace(*arrs,**kwargs):
         rng.shuffle(a)
 
 
-########################################## MITOCHONDRIES PART ##########################################
+########################################## MITOCHONDRIA PART ##########################################
 
 def sample_patches_in_image(datas, patch_size, n_sample_size, cpt, datas_mask=None, patch_filter=None, verbose=False):
     """ Sample matching patches of size `patch_size` from all arrays in `datas` """
@@ -486,7 +486,7 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, cpt, datas_mask=No
         patch_mask &= minimum_filter(datas_mask, patch_size, mode='constant', cval=False)
 
     # Create patches
-    y,x = datas
+    y, x = datas
     patches_x = []
     patches_y = []
     n_height, n_width = n_sample_size
@@ -522,9 +522,9 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, cpt, datas_mask=No
             # Check whether patch is valid or not : contains enough relevant information for training
             # Delete or add it
             patch_grey = cv2.cvtColor(patch_x, cv2.COLOR_RGB2BGR)
-            if patch_is_valid(patch_grey, cpt):
-                patches_x.append(patch_x.tolist())
-                patches_y.append(patch_y.tolist())
+            #if patch_is_valid(patch_grey, cpt):
+            patches_x.append(patch_x.tolist())
+            patches_y.append(patch_y.tolist())
 
             cpt += 1
 
@@ -534,6 +534,7 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, cpt, datas_mask=No
 def create_patches_mito(
         raw_data,
         patch_size,
+        data_path,
         patch_axes = None,
         transforms    = None,
         patch_filter  = no_background_patches(),
@@ -550,6 +551,8 @@ def create_patches_mito(
         Object that yields matching pairs of raw images.
     patch_axes : str or None
         Axes of the extracted patches. If ``None``, will assume to be equal to that of transformed raw data.
+    data_path : str
+        Path of the training collected data
     patch_size : tuple
         Shape of the patches to be extracted from raw images.
         Must be compatible with the number of dimensions and axes of the raw images.
@@ -600,9 +603,11 @@ def create_patches_mito(
     if normalization is None:
         normalization = lambda patches_x, patches_y, x, y, mask, channel: (patches_x, patches_y)
 
+
     image_pairs, n_raw_images = raw_data.generator(), raw_data.size
     tf = Transform(*zip(*transforms))  # convert list of Transforms into Transform of lists
     image_pairs = compose(*tf.generator)(image_pairs)  # combine all transformations with raw images as input
+    all_files_names = sorted(os.listdir(data_path + '/train/GT'))
 
     # Summary
     if verbose:
@@ -656,7 +661,6 @@ def create_patches_mito(
 
     # Create patches for each image
     occupied = 0
-    file_number = 0
     cpt = 0
     print("Building data patches...")
     for i, (x, y, _axes, mask) in tqdm(list_image_pair, total=len(list_image_pair), disable=(not verbose)):
@@ -674,6 +678,10 @@ def create_patches_mito(
 
         # If image is big enough
         if x.shape[0]>=patch_size[0] and x.shape[1]>=patch_size[1]:
+            # Calculate number of patcher per image
+            n_patches_height = math.ceil(x.shape[0] / patch_size[0])
+            n_patches_width = math.ceil(x.shape[1] / patch_size[1])
+
             # Create patches
             _Y, _X, cpt = sample_patches_in_image((y, x), patch_size, (n_patches_height, n_patches_width), cpt, mask, patch_filter)
             # Calculate the number of patches per image
@@ -694,13 +702,12 @@ def create_patches_mito(
                 # Saving patches in folder patches
                 for k in range (n_patches_per_image):
                     x, y = X[occupied + k], Y[occupied + k]
-                    datas = (x,y)
+                    datas = (x, y)
                     try:
-                        patch_file_name = 'PATCH' + str(file_number) + '.STED.ome.tif'
+                        patch_file_name = all_files_names[i].split('.')[0] + '_' + str(k) + '.STED.ome.tif'
                     except:
-                        patch_file_name = 'PATCH' + str(file_number) + '.tif'
+                        patch_file_name = all_files_names[i].split('.')[0] + '_' + str(k) + '.tif'
                     save_patch(patch_file_name, datas)
-                    file_number += 1
 
             occupied += n_patches_per_image
 
@@ -736,7 +743,16 @@ def patch_is_valid(patch, patch_nb, save_deleted_patches = False):
         True if the patch is kept for training, False otherwise
     """
     # Calculate histogram of saturation channel
-    s = cv2.calcHist([patch], [0], None, [256], [0, 256])
+    patch = patch.astype('uint8')
+    s = cv2.calcHist([patch], [1], None, [256], [0, 256])
+
+    if 100<patch_nb<200:
+        #print("Patch number printed : ", patch_nb)
+        #print(patch)
+        cv2.imwrite("todelete/patch_" + str(patch_nb) + ".png", patch)
+        plt.figure(patch_nb )
+        plt.plot(s)
+        plt.savefig("todelete/plot_" + str(patch_nb) + ".png")
 
     # Calculate attribute of the histogram
     pixel_values = np.arange(0, 256)
@@ -747,7 +763,6 @@ def patch_is_valid(patch, patch_nb, save_deleted_patches = False):
     #print(f"mean histo : {patch_nb} : {mean_histo}")
     #print(f"max_histo : {patch_nb} : {max_histo}")
     #print(f"qty_high : {patch_nb} : {qty_high}")
-
 
     if (mean_histo < 145 and max_histo > 1000 and qty_high < 210) or qty_high == 0.0 or mean_histo>240:
         if save_deleted_patches:

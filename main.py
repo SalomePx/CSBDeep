@@ -13,6 +13,7 @@ import keras
 from csbdeep.utils import download_and_extract_zip_file, plot_some, normalize, extract_zip_file
 from csbdeep.data import RawData, create_patches, create_patches_mito, no_background_patches, norm_percentiles, sample_percentiles
 from csbdeep.data.deteriorate import create_noised_inputs
+from csbdeep.data.transform import flip_vertical, flip_90, flip_180, flip_270
 
 from csbdeep.utils import axes_dict, plot_some, plot_history, Path, download_and_extract_zip_file, save_figure
 from csbdeep.utils.tf import limit_gpu_memory
@@ -25,8 +26,8 @@ from csbdeep.models import Config, CARE
 initial_care = False
 save_fig = True
 load = False
-build_data = False
-data_dir = 'data_care'
+build_data = True
+data_dir = 'data_mito_crop'
 
 # -----------------------------
 # -------- Keep time ----------
@@ -70,6 +71,8 @@ if not initial_care:
     X, Y, XY_axes = create_patches_mito (
         raw_data            = raw_data,
         patch_size          = (128,128),
+        data_path           = data_dir,
+        #transforms         = [flip_vertical, flip_90, flip_180, flip_270] ,
         patch_filter        = no_background_patches(0),
         save_file           = data_dir + '/my_training_' + data_dir + '.npz',
     )
@@ -117,12 +120,12 @@ else:
 # ----------------------------------
 if not load:
     ### CARE model
-    config = Config(axes, n_channel_in, n_channel_out, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=200)
+    config = Config(axes, n_channel_in, n_channel_out, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=400)
     print(config)
     vars(config)
     model = CARE(config, 'my_model', basedir='models')
     model.keras_model.summary()
-    history = model.train(X,Y, validation_data=(X_val,Y_val), epochs=10)
+    history = model.train(X,Y, validation_data=(X_val,Y_val), epochs=25)
 
     ### Plot history
     print(sorted(list(history.history.keys())))

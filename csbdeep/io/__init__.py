@@ -92,6 +92,8 @@ def load_training_data(file, validation_split=0, axes=None, n_images=None, verbo
     if n_images is None:
         n_images = X.shape[0]
     assert X.shape[0] == Y.shape[0]
+    print(X.shape)
+    print(n_images)
     assert 0 < n_images <= X.shape[0]
     assert 0 <= validation_split < 1
 
