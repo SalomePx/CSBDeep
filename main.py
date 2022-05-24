@@ -45,13 +45,13 @@ moment = str(month) + '-' + str(day) + '_' +  str(hour) + '-' + str(min)
 if not initial_care:
 
     if build_data:
-        ### Extract zip file
+        # Extract zip file
         extract_zip_file (
             folder_path = '/net/serpico-fs2/spapereu/' + data_dir,
             targetdir   = data_dir,
         )
 
-        ### Create noised images
+        # Create noised images
         create_noised_inputs(
             data_path       = data_dir,
             gaussian_blur   = 3,
@@ -59,7 +59,7 @@ if not initial_care:
             poisson_noise   = False,
         )
 
-    ### Generate training data
+    # Generate training data
     raw_data = RawData.from_folder (
         basepath    = data_dir + '/train',
         source_dirs = ['low'],
@@ -67,17 +67,24 @@ if not initial_care:
         axes        = 'YX',
     )
 
-    ### Creation of patches
+    # Initialization of transforms
+    axes = 'YX'
+    flip_vertical = flip_vertical(axes)
+    flip_90 = flip_90(axes)
+    flip_180 = flip_180(axes)
+    flip_270 = flip_270(axes)
+
+    # Creation of patches
     X, Y, XY_axes = create_patches_mito (
         raw_data            = raw_data,
         patch_size          = (128,128),
         data_path           = data_dir,
-        #transforms         = [flip_vertical, flip_90, flip_180, flip_270] ,
+        transforms         = [flip_vertical, flip_90, flip_180, flip_270] ,
         patch_filter        = no_background_patches(0),
         save_file           = data_dir + '/my_training_' + data_dir + '.npz',
     )
 
-    ### Split into training and validation data
+    # Split into training and validation data
     (X, Y), (X_val, Y_val), axes = load_training_data(data_dir + '/my_training_' + data_dir + '.npz', validation_split=0.05, verbose=True)
     c = axes_dict(axes)['C']
     n_channel_in, n_channel_out = X.shape[c], Y.shape[c]
@@ -120,12 +127,12 @@ else:
 # ----------------------------------
 if not load:
     ### CARE model
-    config = Config(axes, n_channel_in, n_channel_out, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=400)
+    config = Config(axes, n_channel_in, n_channel_out, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=200)
     print(config)
     vars(config)
     model = CARE(config, 'my_model', basedir='models')
     model.keras_model.summary()
-    history = model.train(X,Y, validation_data=(X_val,Y_val), epochs=25)
+    history = model.train(X,Y, validation_data=(X_val,Y_val), epochs=10)
 
     ### Plot history
     print(sorted(list(history.history.keys())))

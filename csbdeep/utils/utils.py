@@ -315,4 +315,23 @@ def save_patch(save_name, datas):
     path_save_y = 'patches/train/GT/' + save_name
     cv2.imwrite(path_save_y, y)
 
+def create_patch_dir(patch_dir_name):
+    try:
+        os.makedirs(patch_dir_name + '/')
+        os.makedirs(patch_dir_name + '/train/')
+        os.makedirs(patch_dir_name + '/train/GT/')
+        os.makedirs(patch_dir_name + '/train/low')
+    except:
+        shutil.rmtree(patch_dir_name)
+        os.makedirs(patch_dir_name + '/')
+        os.makedirs(patch_dir_name + '/train/')
+        os.makedirs(patch_dir_name + '/train/GT/')
+        os.makedirs(patch_dir_name + '/train/low')
+
+def create_histo_dir(histo_dir_name):
+    try:
+        os.makedirs(histo_dir_name + '/')
+    except:
+        shutil.rmtree(histo_dir_name)
+        os.makedirs(histo_dir_name + '/')
 

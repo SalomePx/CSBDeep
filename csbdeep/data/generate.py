@@ -3,6 +3,7 @@ from __future__ import print_function, unicode_literals, absolute_import, divisi
 from six.moves import range, zip, map, reduce, filter
 from six import string_types
 
+from itertools import chain
 from matplotlib import pyplot as plt
 import matplotlib.pyplot as plt
 import sys, os, warnings
@@ -14,7 +15,7 @@ from PIL import Image
 import math
 import cv2
 
-from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice, save_patch, normalize
+from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice, save_patch, normalize, create_patch_dir, create_histo_dir
 from .transform import Transform, permute_axes, broadcast_target
 from ..utils.six import Path
 from ..io import save_training_data
@@ -522,7 +523,8 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, cpt, datas_mask=No
             # Check whether patch is valid or not : contains enough relevant information for training
             # Delete or add it
             patch_grey = cv2.cvtColor(patch_x, cv2.COLOR_RGB2BGR)
-            #if patch_is_valid(patch_grey, cpt):
+            if patch_is_valid(patch_grey, cpt):
+                pass
             patches_x.append(patch_x.tolist())
             patches_y.append(patch_y.tolist())
 
@@ -542,6 +544,7 @@ def create_patches_mito(
         normalization = norm_percentiles(),
         shuffle       = False,
         verbose       = True,
+        compo = False,
     ):
     """Create normalized training data to be used for neural network training.
 
@@ -575,6 +578,8 @@ def create_patches_mito(
         Randomly shuffle all extracted patches.
     verbose : bool, optional
         Display overview of images, transforms, etc.
+    compo : bool
+        Declare if we compose transformation or if we do multiples
 
     Returns
     -------
@@ -603,10 +608,14 @@ def create_patches_mito(
     if normalization is None:
         normalization = lambda patches_x, patches_y, x, y, mask, channel: (patches_x, patches_y)
 
-
     image_pairs, n_raw_images = raw_data.generator(), raw_data.size
     tf = Transform(*zip(*transforms))  # convert list of Transforms into Transform of lists
-    image_pairs = compose(*tf.generator)(image_pairs)  # combine all transformations with raw images as input
+    #print("tf  :", tf)
+    #print("tf.generator  :", tf.generator)
+    #image_pairs = compose(*tf.generator)(image_pairs)  # combine all transformations with raw images as input
+    generators = [tf.generator[i](image_pairs) for i in range (len(tf.generator))] # combine all transformations with raw images as input
+    #print("generators  :", generators)
+    image_pairs = chain(*generators)
     all_files_names = sorted(os.listdir(data_path + '/train/GT'))
 
     # Summary
@@ -628,9 +637,12 @@ def create_patches_mito(
     n_patches = 0
     list_image_pair = list(enumerate(image_pairs))
     image_pair_iter = list_image_pair[:]
+    print('len de image_pair_iter : ', len(image_pair_iter))
     for iter, (x, y, _axes, mask) in image_pair_iter:
-        if iter < 20 :
-            cv2.imwrite('tests/image_'+ str(iter) + '.jpg', x)
+
+        # TODO : Tester si les transfo marchent
+        #cv2.imwrite('todelete/imageTransform_'+ str(iter) + '.tif', x)
+
         if x.shape[0]>=patch_size[0] and x.shape[1]>=patch_size[1]:
             # Calculate the number of patches per image and total final images
             n_patches_height = math.ceil(x.shape[0] / patch_size[0])
@@ -647,17 +659,8 @@ def create_patches_mito(
     Y = np.empty_like(X)
 
     # Create directory where to save files
-    try:
-        os.makedirs('patches/')
-        os.makedirs('patches/train/')
-        os.makedirs('patches/train/GT/')
-        os.makedirs('patches/train/low')
-    except:
-        shutil.rmtree('patches')
-        os.makedirs('patches/')
-        os.makedirs('patches/train/')
-        os.makedirs('patches/train/GT/')
-        os.makedirs('patches/train/low')
+    create_patch_dir('patches')
+    create_histo_dir('histos')
 
     # Create patches for each image
     occupied = 0
@@ -675,6 +678,8 @@ def create_patches_mito(
         (channel is None or (isinstance(channel, int) and 0 <= channel < x.ndim)) or _raise(ValueError())
         channel is None or patch_size[channel] == x.shape[channel] or _raise(
             ValueError('extracted patches must contain all channels.'))
+
+
 
         # If image is big enough
         if x.shape[0]>=patch_size[0] and x.shape[1]>=patch_size[1]:
@@ -733,7 +738,7 @@ def create_patches_mito(
     return X, Y, axes
 
 
-def patch_is_valid(patch, patch_nb, save_deleted_patches = False):
+def patch_is_valid(patch, patch_nb):
     """ Check whether a patch contains too much noise, or not enough relevant information, which could bias the training
     Parameters
     ----------
@@ -743,16 +748,18 @@ def patch_is_valid(patch, patch_nb, save_deleted_patches = False):
         True if the patch is kept for training, False otherwise
     """
     # Calculate histogram of saturation channel
-    patch = patch.astype('uint8')
     s = cv2.calcHist([patch], [1], None, [256], [0, 256])
 
-    if 100<patch_nb<200:
-        #print("Patch number printed : ", patch_nb)
-        #print(patch)
-        cv2.imwrite("todelete/patch_" + str(patch_nb) + ".png", patch)
-        plt.figure(patch_nb )
+    if 0<patch_nb<100:
+        plt.figure(patch_nb)
+        plt.imshow(patch)
+        plt.savefig("todelete/patch_" + str(patch_nb) + ".png")
+        #cv2.imwrite("todelete/patch_" + str(patch_nb) + ".tif", patch)
+        plt.figure(patch_nb+1000)
         plt.plot(s)
-        plt.savefig("todelete/plot_" + str(patch_nb) + ".png")
+        plt.savefig("histos/plot_" + str(patch_nb) + ".png")
+        if patch_nb == 9:
+            cv2.imwrite("todelete/patch9.tif", patch)
 
     # Calculate attribute of the histogram
     pixel_values = np.arange(0, 256)
@@ -770,4 +777,39 @@ def patch_is_valid(patch, patch_nb, save_deleted_patches = False):
         return False
 
     return True
+
+def patch_is_valid_occupation(patch, patch_nb, tshd_noise=25, thshd_occup=0.1):
+    """ Check whether a patch contains too much noise, or not enough relevant information, which could bias the training
+    Parameters
+    ----------
+        patch : a numpy array image
+    Returns
+    -------
+        True if the patch is kept for training, False otherwise
+    """
+    # Calculate histogram of saturation channel
+    s = cv2.calcHist([patch], [1], None, [256], [0, 256])
+
+    if 0<patch_nb<100:
+        plt.figure(patch_nb)
+        plt.imshow(patch)
+        plt.savefig("todelete/patch_" + str(patch_nb) + ".png")
+        #cv2.imwrite("todelete/patch_" + str(patch_nb) + ".tif", patch)
+        plt.figure(patch_nb+1000)
+        plt.plot(s)
+        plt.savefig("histos/plot_" + str(patch_nb) + ".png")
+        if patch_nb == 9:
+            cv2.imwrite("todelete/patch9.tif", patch)
+
+    # Calculate percentage of occupation
+    total_pixel = np.sum(s)
+    occupation = np.sum(s[tshd_noise:])
+    occupation_min = thshd_occup * total_pixel
+
+    # Delete if occupation is not enough
+    if occupation < occupation_min:
+        return False
+
+    return True
+
 

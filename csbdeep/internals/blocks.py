@@ -129,10 +129,7 @@ def unet_block(n_depth=2, n_filter_base=16, kernel_size=(3,3), n_conv_per_depth=
                                batch_norm=batch_norm, name=_name("up_level_%s_no_%s" % (n, n_conv_per_depth)))(layer)
 
         return layer
-
     return _func
-
-
 
 def resnet_block(n_filter, kernel_size=(3,3), pool=(1,1), n_conv_per_block=2,
                  batch_norm=False, kernel_initializer='he_normal', activation='relu'):

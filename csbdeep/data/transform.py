@@ -6,6 +6,7 @@ from six import string_types
 import numpy as np
 from collections import namedtuple
 import sys, os, warnings
+import cv2
 
 from ..utils import _raise, consume, axes_check_and_normalize, axes_dict, move_image_axes
 
@@ -391,7 +392,7 @@ def flip_vertical(axes):
             y = np.fliplr(y)
             yield x, y, axes, mask
 
-    return Transform('Flipped images %s' % axes, _generator, 1)
+    return Transform('Flipped images vertically %s' % axes, _generator, 1)
 
 
 def flip_90(axes):
@@ -402,7 +403,7 @@ def flip_90(axes):
             y = np.rot90(y)
             yield x, y, axes, mask
 
-    return Transform('Flipped images of 90 %s' % axes, _generator, 1)
+    return Transform('Flipped images of 90 degrees %s' % axes, _generator, 1)
 
 def flip_180(axes):
     axes = axes_check_and_normalize(axes)
@@ -412,7 +413,7 @@ def flip_180(axes):
             y = np.rot90(y, k=2)
             yield x, y, axes, mask
 
-    return Transform('Flipped images of 180 %s' % axes, _generator, 1)
+    return Transform('Flipped images of 180 degrees %s' % axes, _generator, 1)
 
 def flip_270(axes):
     axes = axes_check_and_normalize(axes)
@@ -422,7 +423,7 @@ def flip_270(axes):
             y = np.rot90(y, k=3)
             yield x, y, axes, mask
 
-    return Transform('Flipped images of 270 %s' % axes, _generator, 1)
+    return Transform('Flipped images of 270 degrees %s' % axes, _generator, 1)
 
 '''
 def _scale_down_up(data, subsample=0.5):
