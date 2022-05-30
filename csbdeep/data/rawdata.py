@@ -95,13 +95,6 @@ class RawData(namedtuple('RawData' ,('generator' ,'size' ,'description'))):
         def _gen():
             for fx, fy in pairs:
                 x, y = imread(str(fx)), imread(str(fy))
-
-                # Normalize between 0 and 255
-                x = x * 255.0 / x.max()
-                y = y * 255.0 / y.max()
-                x = x.astype('uint8')
-                y = y.astype('uint8')
-
                 len(axes) >= x.ndim or _raise(ValueError())
                 yield x, y, axes[-x.ndim:], None
 

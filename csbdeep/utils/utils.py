@@ -328,10 +328,10 @@ def create_patch_dir(patch_dir_name):
         os.makedirs(patch_dir_name + '/train/GT/')
         os.makedirs(patch_dir_name + '/train/low')
 
-def create_histo_dir(histo_dir_name):
+def create_dir(dir_name):
     try:
-        os.makedirs(histo_dir_name + '/')
+        os.makedirs(dir_name + '/')
     except:
-        shutil.rmtree(histo_dir_name)
-        os.makedirs(histo_dir_name + '/')
+        shutil.rmtree(dir_name)
+        os.makedirs(dir_name + '/')
 

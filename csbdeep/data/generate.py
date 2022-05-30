@@ -3,10 +3,11 @@ from __future__ import print_function, unicode_literals, absolute_import, divisi
 from six.moves import range, zip, map, reduce, filter
 from six import string_types
 
-from itertools import chain
+from scipy.ndimage.filters import maximum_filter
 from matplotlib import pyplot as plt
-import matplotlib.pyplot as plt
+from itertools import chain
 import sys, os, warnings
+import random
 
 from tqdm import tqdm
 import numpy as np
@@ -15,7 +16,8 @@ from PIL import Image
 import math
 import cv2
 
-from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice, save_patch, normalize, create_patch_dir, create_histo_dir
+from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice, save_patch, normalize, create_patch_dir, create_dir
+from patch_selection import patch_is_valid_filter, patch_is_valid_care, patch_is_valid_occupation
 from .transform import Transform, permute_axes, broadcast_target
 from ..utils.six import Path
 from ..io import save_training_data
@@ -96,7 +98,6 @@ def sample_patches_from_multiple_stacks(datas, patch_size, n_samples, datas_mask
         patch_mask &= minimum_filter(datas_mask, patch_size, mode='constant', cval=False)
 
     # get the valid indices
-
     border_slices = tuple([slice(s // 2, d - s + s // 2 + 1) for s, d in zip(patch_size, datas[0].shape)])
     valid_inds = np.where(patch_mask[border_slices])
     n_valid = len(valid_inds[0])
@@ -113,7 +114,6 @@ def sample_patches_from_multiple_stacks(datas, patch_size, n_samples, datas_mask
 
 
 ## Create training data
-
 def _valid_low_high_percentiles(ps):
     return isinstance(ps,(list,tuple,np.ndarray)) and len(ps)==2 and all(map(np.isscalar,ps)) and (0<=ps[0]<ps[1]<=100)
 
@@ -468,29 +468,26 @@ def shuffle_inplace(*arrs,**kwargs):
 
 ########################################## MITOCHONDRIA PART ##########################################
 
-def sample_patches_in_image(datas, patch_size, n_sample_size, cpt, datas_mask=None, patch_filter=None, verbose=False):
+def sample_patches_in_image(datas, patch_size, n_sample_size, image_name, max_filter=False, occup_min=0.05, threshold=0.4, percentile=99.9):
     """ Sample matching patches of size `patch_size` from all arrays in `datas` """
 
     # TODO: checks
 
-    if patch_filter is None:
-        patch_mask = np.ones(datas[0].shape,dtype=np.bool)
-    else:
-        patch_mask = patch_filter(datas, patch_size)
-
-    if datas_mask is not None:
-        # TODO: Test this
-        warnings.warn('Using pixel masks for raw/transformed images not tested.')
-        datas_mask.shape == datas[0].shape or _raise(ValueError())
-        datas_mask.dtype == np.bool or _raise(ValueError())
-        from scipy.ndimage.filters import minimum_filter
-        patch_mask &= minimum_filter(datas_mask, patch_size, mode='constant', cval=False)
-
-    # Create patches
     y, x = datas
     patches_x = []
     patches_y = []
+    nb_saved_patch = 1
     n_height, n_width = n_sample_size
+
+    # Normalization of data
+    x = x * 255.0 / x.max()
+    y = y * 255.0 / y.max()
+
+    if max_filter:
+        filter = maximum_filter(x, patch_size, mode='constant')
+        x_filter = np.where(filter > threshold * np.percentile(x, percentile), 1, 0)
+
+    # Create patches
     for i in range (n_height):
         for j in range (n_width):
             end_height = i * patch_size[0] + patch_size[0]
@@ -499,18 +496,21 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, cpt, datas_mask=No
             # We are in the bottom right corner of the image
             if end_height > x.shape[0] and end_width > x.shape[1]:
                 patch_x, patch_y = x[x.shape[0] - patch_size[0]:, x.shape[1] - patch_size[1]:], y[y.shape[0] - patch_size[1]:, y.shape[1] - patch_size[1]:]
+                patch_x_filter = x_filter[x.shape[0] - patch_size[0]:, x.shape[1] - patch_size[1]:]
 
             # We are on the bottom of the image
             elif end_height > x.shape[0]:
                 start_width = j * patch_size[1]
                 end_width = j * patch_size[1] + patch_size[1]
                 patch_x, patch_y = x[x.shape[0] - patch_size[0]:, start_width:end_width], y[y.shape[0] - patch_size[0]:, start_width:end_width]
+                patch_x_filter = x_filter[x.shape[0] - patch_size[0]:, start_width:end_width]
 
             # We are on the right of the image
             elif end_width > x.shape[1]:
                 start_height = i * patch_size[0]
                 end_height = i * patch_size[0] + patch_size[0]
                 patch_x, patch_y = x[start_height:end_height, x.shape[1] - patch_size[1]:], y[start_height:end_height, y.shape[1] - patch_size[1]:]
+                patch_x_filter = x_filter[start_height:end_height, x.shape[1] - patch_size[1]:]
 
             # We do not touch an end corner of the image
             else :
@@ -519,18 +519,30 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, cpt, datas_mask=No
                 start_width = j * patch_size[1]
                 end_width = j * patch_size[1] + patch_size[1]
                 patch_x, patch_y = x[start_height:end_height, start_width:end_width], y[start_height:end_height, start_width:end_width]
+                patch_x_filter = x_filter[start_height:end_height, start_width:end_width]
 
-            # Check whether patch is valid or not : contains enough relevant information for training
-            # Delete or add it
-            patch_grey = cv2.cvtColor(patch_x, cv2.COLOR_RGB2BGR)
-            if patch_is_valid(patch_grey, cpt):
-                pass
-            patches_x.append(patch_x.tolist())
-            patches_y.append(patch_y.tolist())
+            # Check whether patch is valid or not
+            patch_x_grey = cv2.cvtColor(patch_x, cv2.COLOR_RGB2BGR)
+            patch_y_grey = cv2.cvtColor(patch_y, cv2.COLOR_RGB2BGR)
+            patches = (patch_x_grey, patch_y_grey)
 
-            cpt += 1
+            if max_filter:
+                pair = (patch_x_filter, patch_y)
+                admission = patch_is_valid_occupation(pair, image_name, nb_saved_patch, occup_min)
+            else:
+                admission = patch_is_valid_filter(patches, image_name, nb_saved_patch)
 
-    return np.array(patches_y), np.array(patches_x), cpt
+            if admission:
+                patches_x.append(patch_x.tolist())
+                patches_y.append(patch_y.tolist())
+
+                # Saving patches in folder patches
+                patch_file_name = image_name + '_' + str(nb_saved_patch) + '.png'
+                save_patch(patch_file_name, patches)
+                nb_saved_patch += 1
+
+
+    return np.array(patches_y), np.array(patches_x)
 
 
 def create_patches_mito(
@@ -660,11 +672,10 @@ def create_patches_mito(
 
     # Create directory where to save files
     create_patch_dir('patches')
-    create_histo_dir('histos')
+    create_dir('deleted_patches')
 
     # Create patches for each image
     occupied = 0
-    cpt = 0
     print("Building data patches...")
     for i, (x, y, _axes, mask) in tqdm(list_image_pair, total=len(list_image_pair), disable=(not verbose)):
         if i == 0:
@@ -680,7 +691,6 @@ def create_patches_mito(
             ValueError('extracted patches must contain all channels.'))
 
 
-
         # If image is big enough
         if x.shape[0]>=patch_size[0] and x.shape[1]>=patch_size[1]:
             # Calculate number of patcher per image
@@ -688,31 +698,14 @@ def create_patches_mito(
             n_patches_width = math.ceil(x.shape[1] / patch_size[1])
 
             # Create patches
-            _Y, _X, cpt = sample_patches_in_image((y, x), patch_size, (n_patches_height, n_patches_width), cpt, mask, patch_filter)
-            # Calculate the number of patches per image
+            image_name = all_files_names[i].split('.')[0]
+            _Y, _X = sample_patches_in_image((y, x), patch_size, (n_patches_height, n_patches_width), image_name, mask, patch_filter)
             n_patches_per_image = len(_X)
 
             # If at least on patch is kept within the image
             if n_patches_per_image != 0:
-
-                # Fulfill final container of images with patches
                 s = slice(occupied, occupied + n_patches_per_image)
                 X[s], Y[s] = normalization(_X, _Y, x, y, mask, channel)
-
-                # Save image if one patch at least is deleted (to check selection mechanism)
-                n_patches_height = math.ceil(x.shape[0] / patch_size[0])
-                n_patches_width = math.ceil(x.shape[1] / patch_size[1])
-                max_patches_per_image = n_patches_height * n_patches_width
-
-                # Saving patches in folder patches
-                for k in range (n_patches_per_image):
-                    x, y = X[occupied + k], Y[occupied + k]
-                    datas = (x, y)
-                    try:
-                        patch_file_name = all_files_names[i].split('.')[0] + '_' + str(k) + '.STED.ome.tif'
-                    except:
-                        patch_file_name = all_files_names[i].split('.')[0] + '_' + str(k) + '.tif'
-                    save_patch(patch_file_name, datas)
 
             occupied += n_patches_per_image
 
@@ -736,80 +729,3 @@ def create_patches_mito(
 
     print(f"There are {len(X)} final images for training.")
     return X, Y, axes
-
-
-def patch_is_valid(patch, patch_nb):
-    """ Check whether a patch contains too much noise, or not enough relevant information, which could bias the training
-    Parameters
-    ----------
-        patch : a numpy array image
-    Returns
-    -------
-        True if the patch is kept for training, False otherwise
-    """
-    # Calculate histogram of saturation channel
-    s = cv2.calcHist([patch], [1], None, [256], [0, 256])
-
-    if 0<patch_nb<100:
-        plt.figure(patch_nb)
-        plt.imshow(patch)
-        plt.savefig("todelete/patch_" + str(patch_nb) + ".png")
-        #cv2.imwrite("todelete/patch_" + str(patch_nb) + ".tif", patch)
-        plt.figure(patch_nb+1000)
-        plt.plot(s)
-        plt.savefig("histos/plot_" + str(patch_nb) + ".png")
-        if patch_nb == 9:
-            cv2.imwrite("todelete/patch9.tif", patch)
-
-    # Calculate attribute of the histogram
-    pixel_values = np.arange(0, 256)
-    mean_histo = np.sum(s.T * pixel_values) / np.sum(s)
-    max_histo = np.max(s, axis=0)
-    qty_high = np.sum(s[200:])
-
-    #print(f"mean histo : {patch_nb} : {mean_histo}")
-    #print(f"max_histo : {patch_nb} : {max_histo}")
-    #print(f"qty_high : {patch_nb} : {qty_high}")
-
-    if (mean_histo < 145 and max_histo > 1000 and qty_high < 210) or qty_high == 0.0 or mean_histo>240:
-        if save_deleted_patches:
-            cv2.imwrite('todelete/deletedPatch_' + str(patch_nb) + '.png', patch)
-        return False
-
-    return True
-
-def patch_is_valid_occupation(patch, patch_nb, tshd_noise=25, thshd_occup=0.1):
-    """ Check whether a patch contains too much noise, or not enough relevant information, which could bias the training
-    Parameters
-    ----------
-        patch : a numpy array image
-    Returns
-    -------
-        True if the patch is kept for training, False otherwise
-    """
-    # Calculate histogram of saturation channel
-    s = cv2.calcHist([patch], [1], None, [256], [0, 256])
-
-    if 0<patch_nb<100:
-        plt.figure(patch_nb)
-        plt.imshow(patch)
-        plt.savefig("todelete/patch_" + str(patch_nb) + ".png")
-        #cv2.imwrite("todelete/patch_" + str(patch_nb) + ".tif", patch)
-        plt.figure(patch_nb+1000)
-        plt.plot(s)
-        plt.savefig("histos/plot_" + str(patch_nb) + ".png")
-        if patch_nb == 9:
-            cv2.imwrite("todelete/patch9.tif", patch)
-
-    # Calculate percentage of occupation
-    total_pixel = np.sum(s)
-    occupation = np.sum(s[tshd_noise:])
-    occupation_min = thshd_occup * total_pixel
-
-    # Delete if occupation is not enough
-    if occupation < occupation_min:
-        return False
-
-    return True
-
-

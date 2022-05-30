@@ -23,10 +23,11 @@ from csbdeep.models import Config, CARE
 # ----------------------------------------------
 # -------- Global parameters settings ----------
 # ----------------------------------------------
-initial_care = False
+initial_care = True
+delete_empty_patches = True
 save_fig = True
 load = False
-build_data = True
+build_data = False
 data_dir = 'data_mito_crop'
 
 # -----------------------------
@@ -76,12 +77,13 @@ if not initial_care:
 
     # Creation of patches
     X, Y, XY_axes = create_patches_mito (
-        raw_data            = raw_data,
-        patch_size          = (128,128),
-        data_path           = data_dir,
-        transforms         = [flip_vertical, flip_90, flip_180, flip_270] ,
-        patch_filter        = no_background_patches(0),
-        save_file           = data_dir + '/my_training_' + data_dir + '.npz',
+        raw_data             = raw_data,
+        patch_size           = (128,128),
+        data_path            = data_dir,
+        delete_empty_patches = delete_empty_patches,
+        transforms           = [flip_vertical, flip_90, flip_180, flip_270] ,
+        patch_filter         = no_background_patches(0),
+        save_file            = data_dir + '/my_training_' + data_dir + '.npz',
     )
 
     # Split into training and validation data
@@ -127,12 +129,12 @@ else:
 # ----------------------------------
 if not load:
     ### CARE model
-    config = Config(axes, n_channel_in, n_channel_out, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=200)
+    config = Config(axes, n_channel_in, n_channel_out, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=400)
     print(config)
     vars(config)
     model = CARE(config, 'my_model', basedir='models')
     model.keras_model.summary()
-    history = model.train(X,Y, validation_data=(X_val,Y_val), epochs=10)
+    history = model.train(X,Y, validation_data=(X_val,Y_val), epochs=25)
 
     ### Plot history
     print(sorted(list(history.history.keys())))
