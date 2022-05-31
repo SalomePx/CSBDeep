@@ -23,8 +23,7 @@ from csbdeep.models import Config, CARE
 # ----------------------------------------------
 # -------- Global parameters settings ----------
 # ----------------------------------------------
-initial_care = True
-delete_empty_patches = True
+initial_care = False
 save_fig = True
 load = False
 build_data = False
@@ -80,9 +79,8 @@ if not initial_care:
         raw_data             = raw_data,
         patch_size           = (128,128),
         data_path            = data_dir,
-        delete_empty_patches = delete_empty_patches,
         transforms           = [flip_vertical, flip_90, flip_180, flip_270] ,
-        patch_filter         = no_background_patches(0),
+        max_filter           = True,
         save_file            = data_dir + '/my_training_' + data_dir + '.npz',
     )
 

@@ -3,7 +3,8 @@ from __future__ import print_function, unicode_literals, absolute_import, divisi
 from six.moves import range, zip, map, reduce, filter
 from six import string_types
 
-from scipy.ndimage.filters import maximum_filter
+from scipy.ndimage.filters import maximum_filter, minimum_filter, median_filter
+from scipy.ndimage.filters import gaussian_filter
 from matplotlib import pyplot as plt
 from itertools import chain
 import sys, os, warnings
@@ -17,7 +18,7 @@ import math
 import cv2
 
 from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice, save_patch, normalize, create_patch_dir, create_dir
-from patch_selection import patch_is_valid_filter, patch_is_valid_care, patch_is_valid_occupation
+from .patch_selection import patch_is_valid_occupation_bis, patch_is_valid_care, patch_is_valid_occupation
 from .transform import Transform, permute_axes, broadcast_target
 from ..utils.six import Path
 from ..io import save_training_data
@@ -468,7 +469,7 @@ def shuffle_inplace(*arrs,**kwargs):
 
 ########################################## MITOCHONDRIA PART ##########################################
 
-def sample_patches_in_image(datas, patch_size, n_sample_size, image_name, max_filter=False, occup_min=0.05, threshold=0.4, percentile=99.9):
+def sample_patches_in_image(datas, patch_size, n_sample_size, image_name, max_filter=False, occup_min=0.1, threshold=0.4, percentile=99.9):
     """ Sample matching patches of size `patch_size` from all arrays in `datas` """
 
     # TODO: checks
@@ -477,6 +478,7 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, image_name, max_fi
     patches_x = []
     patches_y = []
     nb_saved_patch = 1
+    nb_patch = 1
     n_height, n_width = n_sample_size
 
     # Normalization of data
@@ -484,8 +486,12 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, image_name, max_fi
     y = y * 255.0 / y.max()
 
     if max_filter:
-        filter = maximum_filter(x, patch_size, mode='constant')
-        x_filter = np.where(filter > threshold * np.percentile(x, percentile), 1, 0)
+        filter =  (y - np.median(y)) / np.std(y)
+        filter = np.where(filter < 0, 0, filter)
+        cv2.imwrite("filtered_images/" + image_name + ".tif", filter)
+        print(f"le percentile est {threshold * np.percentile(y, percentile)}")
+        y_filter = np.where(filter > threshold * np.percentile(y, percentile), 1, 0)
+        print("np.sum(y_filter) :", np.sum(y_filter))
 
     # Create patches
     for i in range (n_height):
@@ -495,22 +501,24 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, image_name, max_fi
 
             # We are in the bottom right corner of the image
             if end_height > x.shape[0] and end_width > x.shape[1]:
-                patch_x, patch_y = x[x.shape[0] - patch_size[0]:, x.shape[1] - patch_size[1]:], y[y.shape[0] - patch_size[1]:, y.shape[1] - patch_size[1]:]
-                patch_x_filter = x_filter[x.shape[0] - patch_size[0]:, x.shape[1] - patch_size[1]:]
+                start_height = x.shape[0] - patch_size[0]
+                start_width = x.shape[1] - patch_size[1]
+                end_height = x.shape[0]
+                end_width = x.shape[1]
 
             # We are on the bottom of the image
             elif end_height > x.shape[0]:
                 start_width = j * patch_size[1]
+                start_height = x.shape[0] - patch_size[0]
                 end_width = j * patch_size[1] + patch_size[1]
-                patch_x, patch_y = x[x.shape[0] - patch_size[0]:, start_width:end_width], y[y.shape[0] - patch_size[0]:, start_width:end_width]
-                patch_x_filter = x_filter[x.shape[0] - patch_size[0]:, start_width:end_width]
+                end_height = x.shape[0]
 
             # We are on the right of the image
             elif end_width > x.shape[1]:
                 start_height = i * patch_size[0]
+                start_width = x.shape[1] - patch_size[1]
                 end_height = i * patch_size[0] + patch_size[0]
-                patch_x, patch_y = x[start_height:end_height, x.shape[1] - patch_size[1]:], y[start_height:end_height, y.shape[1] - patch_size[1]:]
-                patch_x_filter = x_filter[start_height:end_height, x.shape[1] - patch_size[1]:]
+                end_width = x.shape[1]
 
             # We do not touch an end corner of the image
             else :
@@ -518,8 +526,13 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, image_name, max_fi
                 end_height = i * patch_size[0] + patch_size[0]
                 start_width = j * patch_size[1]
                 end_width = j * patch_size[1] + patch_size[1]
-                patch_x, patch_y = x[start_height:end_height, start_width:end_width], y[start_height:end_height, start_width:end_width]
-                patch_x_filter = x_filter[start_height:end_height, start_width:end_width]
+
+
+            # Finally
+            patch_x, patch_y = x[start_height:end_height, start_width:end_width], y[start_height:end_height,start_width:end_width]
+            if max_filter:
+                patch_y_bool = y_filter[start_height:end_height, start_width:end_width]
+                patch_y_filter = filter[start_height:end_height, start_width:end_width]
 
             # Check whether patch is valid or not
             patch_x_grey = cv2.cvtColor(patch_x, cv2.COLOR_RGB2BGR)
@@ -527,10 +540,11 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, image_name, max_fi
             patches = (patch_x_grey, patch_y_grey)
 
             if max_filter:
-                pair = (patch_x_filter, patch_y)
-                admission = patch_is_valid_occupation(pair, image_name, nb_saved_patch, occup_min)
+                ys = [patch_y, patch_y_bool, patch_y_filter]
+                admission = patch_is_valid_occupation(ys, image_name, nb_patch, occup_min)
             else:
-                admission = patch_is_valid_filter(patches, image_name, nb_saved_patch)
+                # Function based on histograms
+                admission = patch_is_valid_occupation_bis(patches, image_name, nb_patch)
 
             if admission:
                 patches_x.append(patch_x.tolist())
@@ -541,6 +555,7 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, image_name, max_fi
                 save_patch(patch_file_name, patches)
                 nb_saved_patch += 1
 
+            nb_patch += 1
 
     return np.array(patches_y), np.array(patches_x)
 
@@ -551,7 +566,7 @@ def create_patches_mito(
         data_path,
         patch_axes = None,
         transforms    = None,
-        patch_filter  = no_background_patches(),
+        max_filter  = False,
         save_file     = None,
         normalization = norm_percentiles(),
         shuffle       = False,
@@ -579,7 +594,7 @@ def create_patches_mito(
         List of :class:`Transform` objects that apply additional transformations to the raw images.
         This can be used to augment the set of raw images (e.g., by including rotations).
         Set to ``None`` to disable. Default: ``None``.
-    patch_filter : function, optional
+    max_filter : function, optional
         Function to determine for each image pair which patches are eligible to be extracted
         (default: :func:`no_background_patches`). Set to ``None`` to disable.
     normalization : function, optional
@@ -673,6 +688,8 @@ def create_patches_mito(
     # Create directory where to save files
     create_patch_dir('patches')
     create_dir('deleted_patches')
+    create_dir('saved_filtered_patches')
+    create_dir('filtered_images')
 
     # Create patches for each image
     occupied = 0
@@ -699,7 +716,7 @@ def create_patches_mito(
 
             # Create patches
             image_name = all_files_names[i].split('.')[0]
-            _Y, _X = sample_patches_in_image((y, x), patch_size, (n_patches_height, n_patches_width), image_name, mask, patch_filter)
+            _Y, _X = sample_patches_in_image((y, x), patch_size, (n_patches_height, n_patches_width), image_name, max_filter)
             n_patches_per_image = len(_X)
 
             # If at least on patch is kept within the image
