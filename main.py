@@ -13,7 +13,7 @@ import keras
 from csbdeep.utils import download_and_extract_zip_file, plot_some, normalize, extract_zip_file
 from csbdeep.data import RawData, create_patches, create_patches_mito, no_background_patches, norm_percentiles, sample_percentiles
 from csbdeep.data.deteriorate import create_noised_inputs
-from csbdeep.data.transform import flip_vertical, flip_90, flip_180, flip_270
+from csbdeep.data.transform import flip_vertical, flip_90, flip_180, flip_270, zoom_aug
 
 from csbdeep.utils import axes_dict, plot_some, plot_history, Path, download_and_extract_zip_file, save_figure
 from csbdeep.utils.tf import limit_gpu_memory
@@ -30,7 +30,7 @@ build_data = False
 data_dir = 'data_mito_crop'
 
 # -----------------------------
-# -------- Keep time ----------
+# -------- Time saving ----------
 # -----------------------------
 date = datetime.datetime.now()
 month = date.month
@@ -73,14 +73,15 @@ if not initial_care:
     flip_90 = flip_90(axes)
     flip_180 = flip_180(axes)
     flip_270 = flip_270(axes)
+    zoom_aug = zoom_aug(axes)
 
     # Creation of patches
     X, Y, XY_axes = create_patches_mito (
         raw_data             = raw_data,
         patch_size           = (128,128),
         data_path            = data_dir,
-        transforms           = [flip_vertical, flip_90, flip_180, flip_270] ,
-        max_filter           = True,
+        transforms           = [flip_vertical, flip_90, flip_180, flip_270, zoom_aug] ,
+        cut_or_sample_patch  = 'sample',
         save_file            = data_dir + '/my_training_' + data_dir + '.npz',
     )
 
@@ -127,12 +128,12 @@ else:
 # ----------------------------------
 if not load:
     ### CARE model
-    config = Config(axes, n_channel_in, n_channel_out, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=400)
+    config = Config(axes, n_channel_in, n_channel_out, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=200)
     print(config)
     vars(config)
     model = CARE(config, 'my_model', basedir='models')
     model.keras_model.summary()
-    history = model.train(X,Y, validation_data=(X_val,Y_val), epochs=25)
+    history = model.train(X,Y, validation_data=(X_val,Y_val), epochs=20)
 
     ### Plot history
     print(sorted(list(history.history.keys())))

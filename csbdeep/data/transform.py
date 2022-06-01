@@ -5,7 +5,9 @@ from six import string_types
 
 import numpy as np
 from collections import namedtuple
+from scipy.ndimage import zoom
 import sys, os, warnings
+import random
 import cv2
 
 from ..utils import _raise, consume, axes_check_and_normalize, axes_dict, move_image_axes
@@ -425,16 +427,15 @@ def flip_270(axes):
 
     return Transform('Flipped images of 270 degrees %s' % axes, _generator, 1)
 
-'''
-def _scale_down_up(data, subsample=0.5):
-    from scipy.ndimage.interpolation import zoom
-    y, x = data 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", UserWarning)
-        factor = np.ones(data.ndim)
-        factor[0] = subsample
-        x = zoom(zoom(x, 1/factor, order=0),
-                                 factor, order=zoom_order)
-        y = zoom(zoom(y, 1 / factor, order=0),
-                 factor, order=zoom_order)
-    return Transform('Zoomed images %s' % axes, _generator, 1)'''
+def zoom_aug(axes):
+    axes = axes_check_and_normalize(axes)
+    def _generator(inputs):
+        for x, y, axes_in, mask in inputs:
+            rdm = random.uniform(0.2, 2.0)
+            x = zoom(x, 1 + rdm, mode = 'constant')
+            y = zoom(y, 1 + rdm, mode = 'constant')
+            yield x, y, axes, mask
+
+    return Transform('Flipped images of 270 degrees %s' % axes, _generator, 1)
+
+

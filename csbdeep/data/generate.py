@@ -3,7 +3,7 @@ from __future__ import print_function, unicode_literals, absolute_import, divisi
 from six.moves import range, zip, map, reduce, filter
 from six import string_types
 
-from scipy.ndimage.filters import maximum_filter, minimum_filter, median_filter
+from scipy.ndimage.filters import maximum_filter, minimum_filter
 from scipy.ndimage.filters import gaussian_filter
 from matplotlib import pyplot as plt
 from itertools import chain
@@ -67,6 +67,55 @@ def no_background_patches(threshold=0.4, percentile=99.9):
         patch_size = [(p//2 if p>1 else p) for p in patch_size]
         filtered = maximum_filter(image, patch_size, mode='constant')
         return filtered > threshold * np.percentile(image,percentile)
+    return _filter
+
+
+def no_background_patches_zscore(threshold=0.2, percentile=99.9):
+
+    # TODO : the definition : in construction
+
+    """Returns a patch filter to be used by :func:`create_patches` to determine for each image pair which patches
+    are eligible for sampling. The purpose is to only sample patches from "interesting" regions of the raw image that
+    actually contain a substantial amount of non-background signal. To that end, a maximum filter is applied to the target image
+    to find the largest values in a region.
+
+    Parameters
+    ----------
+    threshold : float, optional
+        Scalar threshold between 0 and 1 that will be multiplied with the (outlier-robust)
+        maximum of the image (see `percentile` below) to denote a lower bound.
+        Only patches with a maximum value above this lower bound are eligible to be sampled.
+    percentile : float, optional
+        Percentile value to denote the (outlier-robust) maximum of an image, i.e. should be close 100.
+
+    Returns
+    -------
+    function
+        Function that takes an image pair `(y,x)` and the patch size as arguments and
+        returns a binary mask of the same size as the image (to denote the locations
+        eligible for sampling for :func:`create_patches`). At least one pixel of the
+        binary mask must be ``True``, otherwise there are no patches to sample.
+
+    Raises
+    ------
+    ValueError
+        Illegal arguments.
+    """
+
+    (np.isscalar(percentile) and 0 <= percentile <= 100) or _raise(ValueError())
+    (np.isscalar(threshold)  and 0 <= threshold  <=   1) or _raise(ValueError())
+
+    def _filter(datas, image_name, dtype=np.float32):
+        y, x = datas
+        if dtype is not None:
+            y = y.astype(dtype)
+
+        # Make max filter patch_size smaller to avoid only few non-bg pixel close to image border
+        filtered = (y - np.median(y)) / np.std(y)
+        filtered = np.where(filtered < 0, 0, filtered)
+        cv2.imwrite("savings/filtered_images/" + image_name + ".tif", filtered)
+
+        return filtered > threshold * np.percentile(filtered, percentile)
     return _filter
 
 
@@ -469,7 +518,7 @@ def shuffle_inplace(*arrs,**kwargs):
 
 ########################################## MITOCHONDRIA PART ##########################################
 
-def sample_patches_in_image(datas, patch_size, n_sample_size, image_name, max_filter=False, occup_min=0.1, threshold=0.4, percentile=99.9):
+def cut_patches_in_image(datas, patch_size, n_sample_size, image_name, filter_patch=False, occup_min=0.02, threshold=0.2, percentile=99.9):
     """ Sample matching patches of size `patch_size` from all arrays in `datas` """
 
     # TODO: checks
@@ -485,13 +534,11 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, image_name, max_fi
     x = x * 255.0 / x.max()
     y = y * 255.0 / y.max()
 
-    if max_filter:
+    if filter_patch:
         filter =  (y - np.median(y)) / np.std(y)
         filter = np.where(filter < 0, 0, filter)
-        cv2.imwrite("filtered_images/" + image_name + ".tif", filter)
-        print(f"le percentile est {threshold * np.percentile(y, percentile)}")
-        y_filter = np.where(filter > threshold * np.percentile(y, percentile), 1, 0)
-        print("np.sum(y_filter) :", np.sum(y_filter))
+        y_filter = np.where(filter > threshold * np.percentile(filter, percentile), 1, 0)
+        cv2.imwrite("savings/filtered_images/" + image_name + ".tif", filter)
 
     # Create patches
     for i in range (n_height):
@@ -530,7 +577,7 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, image_name, max_fi
 
             # Finally
             patch_x, patch_y = x[start_height:end_height, start_width:end_width], y[start_height:end_height,start_width:end_width]
-            if max_filter:
+            if filter_patch:
                 patch_y_bool = y_filter[start_height:end_height, start_width:end_width]
                 patch_y_filter = filter[start_height:end_height, start_width:end_width]
 
@@ -539,7 +586,7 @@ def sample_patches_in_image(datas, patch_size, n_sample_size, image_name, max_fi
             patch_y_grey = cv2.cvtColor(patch_y, cv2.COLOR_RGB2BGR)
             patches = (patch_x_grey, patch_y_grey)
 
-            if max_filter:
+            if filter_patch:
                 ys = [patch_y, patch_y_bool, patch_y_filter]
                 admission = patch_is_valid_occupation(ys, image_name, nb_patch, occup_min)
             else:
@@ -566,12 +613,12 @@ def create_patches_mito(
         data_path,
         patch_axes = None,
         transforms    = None,
-        max_filter  = False,
+        cut_or_sample_patch = 'cut',
+        delete_black_patches  = True,
         save_file     = None,
         normalization = norm_percentiles(),
         shuffle       = False,
         verbose       = True,
-        compo = False,
     ):
     """Create normalized training data to be used for neural network training.
 
@@ -590,11 +637,13 @@ def create_patches_mito(
     save_file : str or None
         File name to save training data to disk in ``.npz`` format (see :func:`csbdeep.io.save_training_data`).
         If ``None``, data will not be saved.
+    cut_or_sample_patch : 'cut' or 'sample'
+        Define whether we chose to hav random correct patches or to cut them as a grid
     transforms : list or tuple, optional
         List of :class:`Transform` objects that apply additional transformations to the raw images.
         This can be used to augment the set of raw images (e.g., by including rotations).
         Set to ``None`` to disable. Default: ``None``.
-    max_filter : function, optional
+    delete_black_patches : function, optional
         Function to determine for each image pair which patches are eligible to be extracted
         (default: :func:`no_background_patches`). Set to ``None`` to disable.
     normalization : function, optional
@@ -605,8 +654,6 @@ def create_patches_mito(
         Randomly shuffle all extracted patches.
     verbose : bool, optional
         Display overview of images, transforms, etc.
-    compo : bool
-        Declare if we compose transformation or if we do multiples
 
     Returns
     -------
@@ -623,7 +670,7 @@ def create_patches_mito(
         Various reasons.
 
     """
-    ## images and transforms
+    # Images and transforms
     if transforms is None:
         transforms = []
     transforms = list(transforms)
@@ -635,22 +682,22 @@ def create_patches_mito(
     if normalization is None:
         normalization = lambda patches_x, patches_y, x, y, mask, channel: (patches_x, patches_y)
 
-    image_pairs, n_raw_images = raw_data.generator(), raw_data.size
-    tf = Transform(*zip(*transforms))  # convert list of Transforms into Transform of lists
-    #print("tf  :", tf)
-    #print("tf.generator  :", tf.generator)
-    #image_pairs = compose(*tf.generator)(image_pairs)  # combine all transformations with raw images as input
-    generators = [tf.generator[i](image_pairs) for i in range (len(tf.generator))] # combine all transformations with raw images as input
-    #print("generators  :", generators)
-    image_pairs = chain(*generators)
+    nb_transforms = len(transforms)
     all_files_names = sorted(os.listdir(data_path + '/train/GT'))
+    initial_nb_images = raw_data.size
+
+    # Create one generator for all transforms
+    all_image_pairs = [raw_data.generator() for _ in range(nb_transforms)]
+    tf = Transform(*zip(*transforms))
+    generators = [gen(image_pair) for gen, image_pair in zip(tf.generator, all_image_pairs)]
+    image_pairs = chain(*generators)
 
     # Summary
     if verbose:
         print('=' * 66)
         print('Input data:')
         print(raw_data.description)
-        print('=' * 66)    # Calculate number of final images
+        print('=' * 66)
         print('Transformations:')
         for t in transforms:
             print('{t.size} x {t.name}'.format(t=t))
@@ -664,12 +711,8 @@ def create_patches_mito(
     n_patches = 0
     list_image_pair = list(enumerate(image_pairs))
     image_pair_iter = list_image_pair[:]
-    print('len de image_pair_iter : ', len(image_pair_iter))
+
     for iter, (x, y, _axes, mask) in image_pair_iter:
-
-        # TODO : Tester si les transfo marchent
-        #cv2.imwrite('todelete/imageTransform_'+ str(iter) + '.tif', x)
-
         if x.shape[0]>=patch_size[0] and x.shape[1]>=patch_size[1]:
             # Calculate the number of patches per image and total final images
             n_patches_height = math.ceil(x.shape[0] / patch_size[0])
@@ -686,14 +729,15 @@ def create_patches_mito(
     Y = np.empty_like(X)
 
     # Create directory where to save files
-    create_patch_dir('patches')
-    create_dir('deleted_patches')
-    create_dir('saved_filtered_patches')
-    create_dir('filtered_images')
+    create_dir('savings')
+    create_patch_dir('savings/patches')
+    create_dir('savings/deleted_patches')
+    create_dir('savings/filtered_images')
+    create_dir('savings/todelete')
 
     # Create patches for each image
+    print("Building data patches:")
     occupied = 0
-    print("Building data patches...")
     for i, (x, y, _axes, mask) in tqdm(list_image_pair, total=len(list_image_pair), disable=(not verbose)):
         if i == 0:
             axes = axes_check_and_normalize(_axes, len(patch_size))
@@ -715,8 +759,13 @@ def create_patches_mito(
             n_patches_width = math.ceil(x.shape[1] / patch_size[1])
 
             # Create patches
-            image_name = all_files_names[i].split('.')[0]
-            _Y, _X = sample_patches_in_image((y, x), patch_size, (n_patches_height, n_patches_width), image_name, max_filter)
+            idx = i % initial_nb_images
+            image_name = all_files_names[idx].split('.')[0]
+            if cut_or_sample_patch != 'cut':
+                n_samples = (n_patches_height * n_patches_width)
+                _Y, _X = sample_patches_in_image((y,x), patch_size, n_samples, image_name)
+            else :
+                _Y, _X = cut_patches_in_image((y, x), patch_size, (n_patches_height, n_patches_width), image_name, delete_black_patches)
             n_patches_per_image = len(_X)
 
             # If at least on patch is kept within the image
@@ -744,5 +793,41 @@ def create_patches_mito(
         print('Saving data to %s.' % str(Path(save_file)))
         save_training_data(save_file, X, Y, axes)
 
-    print(f"There are {len(X)} final images for training.")
+    if verbose:
+        print(f"There are {len(X)} final images for training and validation.")
+        print('=' * 66)
+
     return X, Y, axes
+
+
+def sample_patches_in_image(datas, patch_size, n_samples, image_name, patch_filter=no_background_patches_zscore()):
+    """ sample matching patches of size `patch_size` from all arrays in `datas` """
+
+    # TODO: checks
+
+    y, x = datas
+    if patch_filter is None:
+        patch_mask = np.ones(y.shape, dtype=np.bool)
+    else:
+        patch_mask = patch_filter(datas, image_name)
+
+    # Get the valid indices
+    border_slices = tuple([slice(s // 2, d - s + s // 2 + 1) for s, d in zip(patch_size, y.shape)])
+    valid_inds = np.where(patch_mask[border_slices])
+    n_valid = len(valid_inds[0])
+
+    if n_valid == 0:
+        raise ValueError("'patch_filter' didn't return any region to sample from")
+
+    sample_inds = choice(range(n_valid), n_samples, replace=(n_valid < n_samples))
+    rand_inds = [v[sample_inds] + s.start for s, v in zip(border_slices, valid_inds)]
+    res = [np.stack([data[tuple(slice(_r - (_p // 2), _r + _p - (_p // 2)) for _r, _p in zip(r, patch_size))] for r in
+                     zip(*rand_inds)]) for data in datas]
+
+    # Saving patches
+    y_res, x_res = res
+    for i in range (len(y_res)):
+        save_name = image_name + '_' + str(i) + '.tif'
+        save_patch(save_name, (x_res[i], y_res[i]))
+
+    return res

@@ -92,8 +92,6 @@ def load_training_data(file, validation_split=0, axes=None, n_images=None, verbo
     if n_images is None:
         n_images = X.shape[0]
     assert X.shape[0] == Y.shape[0]
-    print(X.shape)
-    print(n_images)
     assert 0 < n_images <= X.shape[0]
     assert 0 <= validation_split < 1
 
@@ -103,8 +101,6 @@ def load_training_data(file, validation_split=0, axes=None, n_images=None, verbo
     if validation_split > 0:
         n_val   = int(round(n_images * validation_split))
         n_train = n_images - n_val
-        print(n_val)
-        print(n_train)
         assert 0 < n_val and 0 < n_train
         X_t, Y_t = X[-n_val:],  Y[-n_val:]
         X,   Y   = X[:n_train], Y[:n_train]
@@ -130,11 +126,12 @@ def load_training_data(file, validation_split=0, axes=None, n_images=None, verbo
         n_dim = len(image_size)
         n_channel_in, n_channel_out = X.shape[ax['C']], Y.shape[ax['C']]
 
-        print('number of training images:\t', n_train)
-        print('number of validation images:\t', n_val)
-        print('image size (%dD):\t\t'%n_dim, image_size)
-        print('axes:\t\t\t\t', axes)
-        print('channels in / out:\t\t', n_channel_in, '/', n_channel_out)
+        print('Number of training images:\t', n_train)
+        print('Number of validation images:\t', n_val)
+        print('Image size (%dD):\t\t'%n_dim, image_size)
+        print('Axes:\t\t\t\t', axes)
+        print('Channels In/Out:\t\t', n_channel_in, '/', n_channel_out)
+        print('=' * 66)
 
     return (X,Y), data_val, axes
 

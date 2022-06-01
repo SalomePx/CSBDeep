@@ -101,20 +101,21 @@ def patch_is_valid_occupation_bis(patches, image_name, nb_patch, tshd_noise=100,
 
 
 
-def patch_is_valid_occupation(patches, image_name, nb_patch, occup_min):
+def patch_is_valid_occupation(patches, image_name, nb_patch, occup_min, verbose=False):
 
     patch_y, patch_y_bool, patch_y_filter = patches
     total_pixel = patch_y.shape[0] * patch_y.shape[1]
+    occupation = np.sum(patch_y_bool) / total_pixel
 
-    print(image_name, '-----', nb_patch)
-    print(f"Occup min : {occup_min}")
-    print(f"Occupation : {(np.sum(patch_y_bool) / total_pixel)}")
+    if verbose:
+        print(image_name, '-----', nb_patch)
+        print(f"Occup min : {occup_min}")
+        print(f"Occupation : {(np.sum(patch_y_bool) / total_pixel)}")
 
-    if (np.sum(patch_y_bool) / total_pixel) < occup_min:
-        print("DELETED PATCH ")
+    if occupation < occup_min:
+        if verbose:
+            print("DELETED PATCH ")
         cv2.imwrite("deleted_patches/" + image_name + '_' + str(nb_patch) + ".png", patch_y)
         return False
-
-    cv2.imwrite("saved_filtered_patches/" + image_name + '_' + str(nb_patch) + ".png", patch_y_filter)
 
     return True
