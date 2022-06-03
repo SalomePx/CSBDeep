@@ -188,7 +188,6 @@ def download_and_extract_zip_file(url, targetdir='.', verbose=True):
 
 def extract_zip_file(folder_path, targetdir='data_mito', zip=False):
 
-    # TODO : watch if folder is replaced when existing
     if zip:
         try:
             log('Files missing, extracting...', end='')

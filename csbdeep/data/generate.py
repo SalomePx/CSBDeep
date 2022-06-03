@@ -17,16 +17,17 @@ from PIL import Image
 import math
 import cv2
 
-from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice, save_patch, normalize, create_patch_dir, create_dir
-from .patch_selection import patch_is_valid_occupation_bis, patch_is_valid_care, patch_is_valid_occupation
+from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice, save_patch, \
+    normalize, create_patch_dir, create_dir
+from .patch_selection import patch_is_valid_care, patch_is_valid_occupation
 from .transform import Transform, permute_axes, broadcast_target
-from ..utils.six import Path
+from ..internals.losses import signal_to_noise
 from ..io import save_training_data
+from ..utils.six import Path
 
 
 ## Patch filter
 def no_background_patches(threshold=0.4, percentile=99.9):
-
     """Returns a patch filter to be used by :func:`create_patches` to determine for each image pair which patches
     are eligible for sampling. The purpose is to only sample patches from "interesting" regions of the raw image that
     actually contain a substantial amount of non-background signal. To that end, a maximum filter is applied to the target image
@@ -56,7 +57,7 @@ def no_background_patches(threshold=0.4, percentile=99.9):
     """
 
     (np.isscalar(percentile) and 0 <= percentile <= 100) or _raise(ValueError())
-    (np.isscalar(threshold)  and 0 <= threshold  <=   1) or _raise(ValueError())
+    (np.isscalar(threshold) and 0 <= threshold <= 1) or _raise(ValueError())
 
     from scipy.ndimage.filters import maximum_filter
     def _filter(datas, patch_size, dtype=np.float32):
@@ -64,14 +65,14 @@ def no_background_patches(threshold=0.4, percentile=99.9):
         if dtype is not None:
             image = image.astype(dtype)
         # make max filter patch_size smaller to avoid only few non-bg pixel close to image border
-        patch_size = [(p//2 if p>1 else p) for p in patch_size]
+        patch_size = [(p // 2 if p > 1 else p) for p in patch_size]
         filtered = maximum_filter(image, patch_size, mode='constant')
-        return filtered > threshold * np.percentile(image,percentile)
+        return filtered > threshold * np.percentile(image, percentile)
+
     return _filter
 
 
 def no_background_patches_zscore(threshold=0.2, percentile=99.9):
-
     # TODO : the definition : in construction
 
     """Returns a patch filter to be used by :func:`create_patches` to determine for each image pair which patches
@@ -103,7 +104,7 @@ def no_background_patches_zscore(threshold=0.2, percentile=99.9):
     """
 
     (np.isscalar(percentile) and 0 <= percentile <= 100) or _raise(ValueError())
-    (np.isscalar(threshold)  and 0 <= threshold  <=   1) or _raise(ValueError())
+    (np.isscalar(threshold) and 0 <= threshold <= 1) or _raise(ValueError())
 
     def _filter(datas, image_name, dtype=np.float32):
         y, x = datas
@@ -116,26 +117,28 @@ def no_background_patches_zscore(threshold=0.2, percentile=99.9):
         cv2.imwrite("savings/filtered_images/" + image_name + ".tif", filtered)
 
         return filtered > threshold * np.percentile(filtered, percentile)
-    return _filter
 
+    return _filter
 
 
 ## Sample patches
 
-def sample_patches_from_multiple_stacks(datas, patch_size, n_samples, datas_mask=None, patch_filter=None, verbose=False):
+def sample_patches_from_multiple_stacks(datas, patch_size, n_samples, datas_mask=None, patch_filter=None,
+                                        verbose=False):
     """ sample matching patches of size `patch_size` from all arrays in `datas` """
 
     # TODO: some of these checks are already required in 'create_patches'
-    len(patch_size)==datas[0].ndim or _raise(ValueError())
+    len(patch_size) == datas[0].ndim or _raise(ValueError())
 
-    if not all(( a.shape == datas[0].shape for a in datas )):
+    if not all((a.shape == datas[0].shape for a in datas)):
         raise ValueError("all input shapes must be the same: %s" % (" / ".join(str(a.shape) for a in datas)))
 
-    if not all(( 0 < s <= d for s,d in zip(patch_size,datas[0].shape) )):
-        raise ValueError("patch_size %s negative or larger than data shape %s along some dimensions" % (str(patch_size), str(datas[0].shape)))
+    if not all((0 < s <= d for s, d in zip(patch_size, datas[0].shape))):
+        raise ValueError("patch_size %s negative or larger than data shape %s along some dimensions" % (
+            str(patch_size), str(datas[0].shape)))
 
     if patch_filter is None:
-        patch_mask = np.ones(datas[0].shape,dtype=np.bool)
+        patch_mask = np.ones(datas[0].shape, dtype=np.bool)
     else:
         patch_mask = patch_filter(datas, patch_size)
 
@@ -158,16 +161,18 @@ def sample_patches_from_multiple_stacks(datas, patch_size, n_samples, datas_mask
     sample_inds = choice(range(n_valid), n_samples, replace=(n_valid < n_samples))
     rand_inds = [v[sample_inds] + s.start for s, v in zip(border_slices, valid_inds)]
 
-    res = [np.stack([data[tuple(slice(_r-(_p//2),_r+_p-(_p//2)) for _r,_p in zip(r,patch_size))] for r in zip(*rand_inds)]) for data in datas]
+    res = [np.stack([data[tuple(slice(_r - (_p // 2), _r + _p - (_p // 2)) for _r, _p in zip(r, patch_size))] for r in
+                     zip(*rand_inds)]) for data in datas]
     return res
-
 
 
 ## Create training data
 def _valid_low_high_percentiles(ps):
-    return isinstance(ps,(list,tuple,np.ndarray)) and len(ps)==2 and all(map(np.isscalar,ps)) and (0<=ps[0]<ps[1]<=100)
+    return isinstance(ps, (list, tuple, np.ndarray)) and len(ps) == 2 and all(map(np.isscalar, ps)) and (
+            0 <= ps[0] < ps[1] <= 100)
 
-def _memory_check(n_required_memory_bytes, thresh_free_frac=0.5, thresh_abs_bytes=1024*1024**2):
+
+def _memory_check(n_required_memory_bytes, thresh_free_frac=0.5, thresh_abs_bytes=1024 * 1024 ** 2):
     try:
         # raise ImportError
         import psutil
@@ -176,14 +181,17 @@ def _memory_check(n_required_memory_bytes, thresh_free_frac=0.5, thresh_abs_byte
         if mem_frac > 1:
             raise MemoryError('Not enough available memory.')
         elif mem_frac > thresh_free_frac:
-            print('Warning: will use at least %.0f MB (%.1f%%) of available memory.\n' % (n_required_memory_bytes/1024**2,100*mem_frac), file=sys.stderr)
+            print('Warning: will use at least %.0f MB (%.1f%%) of available memory.\n' % (
+                n_required_memory_bytes / 1024 ** 2, 100 * mem_frac), file=sys.stderr)
             sys.stderr.flush()
     except ImportError:
         if n_required_memory_bytes > thresh_abs_bytes:
-            print('Warning: will use at least %.0f MB of memory.\n' % (n_required_memory_bytes/1024**2), file=sys.stderr)
+            print('Warning: will use at least %.0f MB of memory.\n' % (n_required_memory_bytes / 1024 ** 2),
+                  file=sys.stderr)
             sys.stderr.flush()
 
-def sample_percentiles(pmin=(1,3), pmax=(99.5,99.9)):
+
+def sample_percentiles(pmin=(1, 3), pmax=(99.5, 99.9)):
     """Sample percentile values from a uniform distribution.
 
     Parameters
@@ -245,14 +253,14 @@ def norm_percentiles(percentiles=sample_percentiles(), relu_last=False):
         _valid_low_high_percentiles(percentiles) or _raise(ValueError(percentiles))
         get_percentiles = lambda: percentiles
 
-    def _normalize(patches_x,patches_y, x,y,mask,channel):
+    def _normalize(patches_x, patches_y, x, y, mask, channel):
         pmins, pmaxs = zip(*(get_percentiles() for _ in patches_x))
         percentile_axes = None if channel is None else tuple((d for d in range(x.ndim) if d != channel))
-        _perc = lambda a,p: np.percentile(a,p,axis=percentile_axes,keepdims=True)
-        patches_x_norm = normalize_mi_ma(patches_x, _perc(x,pmins), _perc(x,pmaxs))
+        _perc = lambda a, p: np.percentile(a, p, axis=percentile_axes, keepdims=True)
+        patches_x_norm = normalize_mi_ma(patches_x, _perc(x, pmins), _perc(x, pmaxs))
         if relu_last:
             pmins = np.zeros_like(pmins)
-        patches_y_norm = normalize_mi_ma(patches_y, _perc(y,pmins), _perc(y,pmaxs))
+        patches_y_norm = normalize_mi_ma(patches_y, _perc(y, pmins), _perc(y, pmaxs))
         return patches_x_norm, patches_y_norm
 
     return _normalize
@@ -262,14 +270,14 @@ def create_patches(
         raw_data,
         patch_size,
         n_patches_per_image,
-        patch_axes    = None,
-        save_file     = None,
-        transforms    = None,
-        patch_filter  = no_background_patches(),
-        normalization = norm_percentiles(),
-        shuffle       = True,
-        verbose       = True,
-    ):
+        patch_axes=None,
+        save_file=None,
+        transforms=None,
+        patch_filter=no_background_patches(),
+        normalization=norm_percentiles(),
+        shuffle=True,
+        verbose=True,
+):
     """Create normalized training data to be used for neural network training.
 
     Parameters
@@ -328,7 +336,7 @@ def create_patches(
       Would allow to work with large data that doesn't fit in memory.
 
     """
-    ## images and transforms
+    # Images and transforms
     if transforms is None:
         transforms = []
     transforms = list(transforms)
@@ -341,29 +349,30 @@ def create_patches(
         normalization = lambda patches_x, patches_y, x, y, mask, channel: (patches_x, patches_y)
 
     image_pairs, n_raw_images = raw_data.generator(), raw_data.size
-    tf = Transform(*zip(*transforms)) # convert list of Transforms into Transform of lists
-    image_pairs = compose(*tf.generator)(image_pairs) # combine all transformations with raw images as input
+    tf = Transform(*zip(*transforms))
+    image_pairs = compose(*tf.generator)(image_pairs)
     n_transforms = np.prod(tf.size)
     n_images = n_raw_images * n_transforms
     n_patches = n_images * n_patches_per_image
-    n_required_memory_bytes = 2 * n_patches*np.prod(patch_size) * 4
+    n_required_memory_bytes = 2 * n_patches * np.prod(patch_size) * 4
 
     ## memory check
     _memory_check(n_required_memory_bytes)
 
     ## summary
     if verbose:
-        print('='*66)
-        print('%5d raw images x %4d transformations   = %5d images' % (n_raw_images,n_transforms,n_images))
-        print('%5d images     x %4d patches per image = %5d patches in total' % (n_images,n_patches_per_image,n_patches))
-        print('='*66)
+        print('=' * 66)
+        print('%5d raw images x %4d transformations   = %5d images' % (n_raw_images, n_transforms, n_images))
+        print('%5d images     x %4d patches per image = %5d patches in total' % (
+            n_images, n_patches_per_image, n_patches))
+        print('=' * 66)
         print('Input data:')
         print(raw_data.description)
-        print('='*66)
+        print('=' * 66)
         print('Transformations:')
         for t in transforms:
             print('{t.size} x {t.name}'.format(t=t))
-        print('='*66)
+        print('=' * 66)
         print('Patch size:')
         print(" x ".join(str(p) for p in patch_size))
         print('=' * 66)
@@ -371,45 +380,46 @@ def create_patches(
     sys.stdout.flush()
 
     ## sample patches from each pair of transformed raw images
-    X = np.empty((n_patches,)+tuple(patch_size),dtype=np.float32)
+    X = np.empty((n_patches,) + tuple(patch_size), dtype=np.float32)
     Y = np.empty_like(X)
 
-    for i, (x,y,_axes,mask) in tqdm(enumerate(image_pairs),total=n_images,disable=(not verbose)):
+    for i, (x, y, _axes, mask) in tqdm(enumerate(image_pairs), total=n_images, disable=(not verbose)):
         if i >= n_images:
             warnings.warn('more raw images (or transformations thereof) than expected, skipping excess images.')
             break
-        if i==0:
-            axes = axes_check_and_normalize(_axes,len(patch_size))
+        if i == 0:
+            axes = axes_check_and_normalize(_axes, len(patch_size))
             channel = axes_dict(axes)['C']
         # checks
         # len(axes) >= x.ndim or _raise(ValueError())
         axes == axes_check_and_normalize(_axes) or _raise(ValueError('not all images have the same axes.'))
         x.shape == y.shape or _raise(ValueError())
         mask is None or mask.shape == x.shape or _raise(ValueError())
-        (channel is None or (isinstance(channel,int) and 0<=channel<x.ndim)) or _raise(ValueError())
-        channel is None or patch_size[channel]==x.shape[channel] or _raise(ValueError('extracted patches must contain all channels.'))
+        (channel is None or (isinstance(channel, int) and 0 <= channel < x.ndim)) or _raise(ValueError())
+        channel is None or patch_size[channel] == x.shape[channel] or _raise(
+            ValueError('extracted patches must contain all channels.'))
 
-        _Y,_X = sample_patches_from_multiple_stacks((y,x), patch_size, n_patches_per_image, mask, patch_filter)
+        _Y, _X = sample_patches_from_multiple_stacks((y, x), patch_size, n_patches_per_image, mask, patch_filter)
 
-        s = slice(i*n_patches_per_image,(i+1)*n_patches_per_image)
-        X[s], Y[s] = normalization(_X,_Y, x,y,mask,channel)
+        s = slice(i * n_patches_per_image, (i + 1) * n_patches_per_image)
+        X[s], Y[s] = normalization(_X, _Y, x, y, mask, channel)
 
     if shuffle:
-        shuffle_inplace(X,Y)
+        shuffle_inplace(X, Y)
 
-    axes = 'SC'+axes.replace('C','')
+    axes = 'SC' + axes.replace('C', '')
     if channel is None:
-        X = np.expand_dims(X,1)
-        Y = np.expand_dims(Y,1)
+        X = np.expand_dims(X, 1)
+        Y = np.expand_dims(Y, 1)
     else:
-        X = np.moveaxis(X, 1+channel, 1)
-        Y = np.moveaxis(Y, 1+channel, 1)
+        X = np.moveaxis(X, 1 + channel, 1)
+        Y = np.moveaxis(Y, 1 + channel, 1)
 
     if save_file is not None:
         print('Saving data to %s.' % str(Path(save_file)))
         save_training_data(save_file, X, Y, axes)
 
-    return X,Y,axes
+    return X, Y, axes
 
 
 def create_patches_reduced_target(
@@ -417,9 +427,9 @@ def create_patches_reduced_target(
         patch_size,
         n_patches_per_image,
         reduction_axes,
-        target_axes = None, # TODO: this should rather be part of RawData and also exposed to transforms
+        target_axes=None,  # TODO: this should rather be part of RawData and also exposed to transforms
         **kwargs
-    ):
+):
     """Create normalized training data to be used for neural network training.
 
     In contrast to :func:`create_patches`, it is assumed that the target image has reduced
@@ -446,16 +456,16 @@ def create_patches_reduced_target(
         See :func:`create_patches`. Note that the shape of the target data will be 1 along all reduction axes.
 
     """
-    reduction_axes = axes_check_and_normalize(reduction_axes,disallowed='S')
+    reduction_axes = axes_check_and_normalize(reduction_axes, disallowed='S')
 
     transforms = kwargs.get('transforms')
     if transforms is None:
         transforms = []
     transforms = list(transforms)
-    transforms.insert(0,broadcast_target(target_axes))
+    transforms.insert(0, broadcast_target(target_axes))
     kwargs['transforms'] = transforms
 
-    save_file = kwargs.pop('save_file',None)
+    save_file = kwargs.pop('save_file', None)
 
     if any(s is None for s in patch_size):
         patch_axes = kwargs.get('patch_axes')
@@ -466,19 +476,19 @@ def create_patches_reduced_target(
             _transforms = transforms
         tf = Transform(*zip(*_transforms))
         image_pairs = compose(*tf.generator)(raw_data.generator())
-        x,y,axes,mask = next(image_pairs) # get the first entry from the generator
+        x, y, axes, mask = next(image_pairs)  # get the first entry from the generator
         patch_size = list(patch_size)
-        for i,(a,s) in enumerate(zip(axes,patch_size)):
+        for i, (a, s) in enumerate(zip(axes, patch_size)):
             if s is not None: continue
             a in reduction_axes or _raise(ValueError("entry of patch_size is None for non reduction axis %s." % a))
             patch_size[i] = x.shape[i]
         patch_size = tuple(patch_size)
-        del x,y,axes,mask
+        del x, y, axes, mask
 
-    X,Y,axes = create_patches (
-        raw_data            = raw_data,
-        patch_size          = patch_size,
-        n_patches_per_image = n_patches_per_image,
+    X, Y, axes = create_patches(
+        raw_data=raw_data,
+        patch_size=patch_size,
+        n_patches_per_image=n_patches_per_image,
         **kwargs
     )
 
@@ -489,22 +499,22 @@ def create_patches_reduced_target(
         if n_dims == 1:
             warnings.warn("extracted target patches already have dimensionality 1 along reduction axis %s." % a)
         else:
-            t = np.take(Y,(1,),axis=ax[a])
-            Y = np.take(Y,(0,),axis=ax[a])
-            i = np.random.choice(Y.size,size=100)
-            if not np.all(t.flat[i]==Y.flat[i]):
+            t = np.take(Y, (1,), axis=ax[a])
+            Y = np.take(Y, (0,), axis=ax[a])
+            i = np.random.choice(Y.size, size=100)
+            if not np.all(t.flat[i] == Y.flat[i]):
                 warnings.warn("extracted target patches vary along reduction axis %s." % a)
 
     if save_file is not None:
         print('Saving data to %s.' % str(Path(save_file)))
         save_training_data(save_file, X, Y, axes)
 
-    return X,Y,axes
+    return X, Y, axes
 
 
 # Misc
 
-def shuffle_inplace(*arrs,**kwargs):
+def shuffle_inplace(*arrs, **kwargs):
     seed = kwargs.pop('seed', None)
     if seed is None:
         rng = np.random
@@ -516,12 +526,43 @@ def shuffle_inplace(*arrs,**kwargs):
         rng.shuffle(a)
 
 
-########################################## MITOCHONDRIA PART ##########################################
+# ---------------------------------------------------------------------------------------------------------
+# ----------------------------------------- MITOCHONDRIA PART ---------------------------------------------
+# ---------------------------------------------------------------------------------------------------------
 
-def cut_patches_in_image(datas, patch_size, n_sample_size, image_name, filter_patch=False, occup_min=0.02, threshold=0.2, percentile=99.9):
-    """ Sample matching patches of size `patch_size` from all arrays in `datas` """
+def cut_patches_in_image(datas, patch_size, n_sample_size, image_name, delete_black_patches=True, occup_min=0.02,
+                         threshold=0.2, percentile=99.9):
+    """Cut images in patches with the method of a grid.
 
-    # TODO: checks
+    Use the previous calculation of how many patches can fulfill the height and width (round to ceil), leading to
+    overlap between the two last patches. If patch size is (128,128) and image is (300, 300), it will contain
+    (h, w) = (300 // 128 + 1, 300 // 128) patches for height and width respectively and a total of h*w patches.
+
+    Parameters
+    ----------
+    datas : tuple of numpy array (y, x)
+        Where y is GT and x is input
+    patch_size : tuple of int (a, b)
+        Where a is the size of the x-axis and b is the size of the y-axis
+    n_sample_size : tuple of int (h, w)
+        Where h and w are the number of patch fulfilling the x-axis and y-axis respectively
+    image_name : str
+        Name of the image in which we cut patches (to save patches)
+    delete_black_patches : bool
+        True if we delete background patches with the z-score threshold
+    occup_min : float between 0 and 1
+        Minimum occupation of relevant information. To adjust according to the dataset.
+        For the selection of patches. Used with delete_black_patches=True only.
+    threshold : float between 0 and 1
+        Number of pixels that we want to be superior to the threshold * percentile.
+        For the selection of patches. Used with delete_black_patches=True only.
+    percentile : float between 0 and 100
+        Percentile wanted for the selection of patches. Used with delete_black_patches=True only.
+    Returns
+    -------
+    tuple(y:class:`numpy.ndarray`, x:class:`numpy.ndarray`)
+        Each element of the tuple contains the cutted patches of GT and low resolution input respectively
+    """
 
     y, x = datas
     patches_x = []
@@ -530,19 +571,27 @@ def cut_patches_in_image(datas, patch_size, n_sample_size, image_name, filter_pa
     nb_patch = 1
     n_height, n_width = n_sample_size
 
+    # Checks
+    assert (each_patch_size > 0 and (type(each_patch_size) is int) for each_patch_size in patch_size)
+    assert x.shape == y.shape and x.shape[0] >= patch_size[0] and x.shape[1] >= patch_size[1]
+    assert type(image_name) is str
+    assert n_sample_size > 0
+    assert 0 <= occup_min <= 1 and 0 <= threshold <= 1 and 0 <= percentile <= 100
+
     # Normalization of data
     x = x * 255.0 / x.max()
     y = y * 255.0 / y.max()
 
-    if filter_patch:
-        filter =  (y - np.median(y)) / np.std(y)
-        filter = np.where(filter < 0, 0, filter)
-        y_filter = np.where(filter > threshold * np.percentile(filter, percentile), 1, 0)
-        cv2.imwrite("savings/filtered_images/" + image_name + ".tif", filter)
+    # Apply filter (Z-score) on images for detection of black filters if wanted
+    if delete_black_patches:
+        filtered = (y - np.median(y)) / np.std(y)
+        filtered = np.where(filtered < 0, 0, filtered)
+        y_filter = np.where(filtered > threshold * np.percentile(filtered, percentile), 1, 0)
+        cv2.imwrite("savings/filtered_images/" + image_name + ".tif", filtered)
 
     # Create patches
-    for i in range (n_height):
-        for j in range (n_width):
+    for i in range(n_height):
+        for j in range(n_width):
             end_height = i * patch_size[0] + patch_size[0]
             end_width = j * patch_size[1] + patch_size[1]
 
@@ -568,38 +617,34 @@ def cut_patches_in_image(datas, patch_size, n_sample_size, image_name, filter_pa
                 end_width = x.shape[1]
 
             # We do not touch an end corner of the image
-            else :
+            else:
                 start_height = i * patch_size[0]
                 end_height = i * patch_size[0] + patch_size[0]
                 start_width = j * patch_size[1]
                 end_width = j * patch_size[1] + patch_size[1]
 
-
             # Finally
-            patch_x, patch_y = x[start_height:end_height, start_width:end_width], y[start_height:end_height,start_width:end_width]
-            if filter_patch:
+            patch_x, patch_y = x[start_height:end_height, start_width:end_width], y[start_height:end_height,
+                                                                                  start_width:end_width]
+            if delete_black_patches:
                 patch_y_bool = y_filter[start_height:end_height, start_width:end_width]
-                patch_y_filter = filter[start_height:end_height, start_width:end_width]
+                patch_y_filter = filtered[start_height:end_height, start_width:end_width]
 
-            # Check whether patch is valid or not
-            patch_x_grey = cv2.cvtColor(patch_x, cv2.COLOR_RGB2BGR)
-            patch_y_grey = cv2.cvtColor(patch_y, cv2.COLOR_RGB2BGR)
-            patches = (patch_x_grey, patch_y_grey)
-
-            if filter_patch:
+            # Keep patch or not
+            if delete_black_patches:
                 ys = [patch_y, patch_y_bool, patch_y_filter]
                 admission = patch_is_valid_occupation(ys, image_name, nb_patch, occup_min)
             else:
-                # Function based on histograms
-                admission = patch_is_valid_occupation_bis(patches, image_name, nb_patch)
+                admission = True
 
+            # Add the patch in the general list if admissible
             if admission:
                 patches_x.append(patch_x.tolist())
                 patches_y.append(patch_y.tolist())
 
                 # Saving patches in folder patches
-                patch_file_name = image_name + '_' + str(nb_saved_patch) + '.png'
-                save_patch(patch_file_name, patches)
+                patch_file_name = image_name + '_' + str(nb_saved_patch) + '.tif'
+                save_patch(patch_file_name, (patch_x, patch_y))
                 nb_saved_patch += 1
 
             nb_patch += 1
@@ -611,15 +656,14 @@ def create_patches_mito(
         raw_data,
         patch_size,
         data_path,
-        patch_axes = None,
-        transforms    = None,
-        cut_or_sample_patch = 'cut',
-        delete_black_patches  = True,
-        save_file     = None,
-        normalization = norm_percentiles(),
-        shuffle       = False,
-        verbose       = True,
-    ):
+        patch_axes=None,
+        transforms=None,
+        cut_or_sample_patch='cut',
+        delete_black_patches=True,
+        save_file=None,
+        normalization=norm_percentiles(),
+        shuffle=False,
+        verbose=True):
     """Create normalized training data to be used for neural network training.
 
     Parameters
@@ -638,7 +682,7 @@ def create_patches_mito(
         File name to save training data to disk in ``.npz`` format (see :func:`csbdeep.io.save_training_data`).
         If ``None``, data will not be saved.
     cut_or_sample_patch : 'cut' or 'sample'
-        Define whether we chose to hav random correct patches or to cut them as a grid
+        Define whether we chose to select random patches or to cut them as a grid within images.
     transforms : list or tuple, optional
         List of :class:`Transform` objects that apply additional transformations to the raw images.
         This can be used to augment the set of raw images (e.g., by including rotations).
@@ -657,7 +701,7 @@ def create_patches_mito(
 
     Returns
     -------
-    tuple(:class:`numpy.ndarray`, :class:`numpy.ndarray`, str)
+    tuple(:class:`numpy.ndarray`, :class:`numpy.ndarray`)
         Returns a tuple (`X`, `Y`, `axes`) with the normalized extracted patches from all (transformed) raw images
         and their axes.
         `X` is the array of patches extracted from source images with `Y` being the array of corresponding target patches.
@@ -668,8 +712,8 @@ def create_patches_mito(
     ------
     ValueError
         Various reasons.
-
     """
+
     # Images and transforms
     if transforms is None:
         transforms = []
@@ -711,9 +755,8 @@ def create_patches_mito(
     n_patches = 0
     list_image_pair = list(enumerate(image_pairs))
     image_pair_iter = list_image_pair[:]
-
-    for iter, (x, y, _axes, mask) in image_pair_iter:
-        if x.shape[0]>=patch_size[0] and x.shape[1]>=patch_size[1]:
+    for _, (x, y, _axes, mask) in image_pair_iter:
+        if x.shape[0] >= patch_size[0] and x.shape[1] >= patch_size[1]:
             # Calculate the number of patches per image and total final images
             n_patches_height = math.ceil(x.shape[0] / patch_size[0])
             n_patches_width = math.ceil(x.shape[1] / patch_size[1])
@@ -751,9 +794,8 @@ def create_patches_mito(
         channel is None or patch_size[channel] == x.shape[channel] or _raise(
             ValueError('extracted patches must contain all channels.'))
 
-
         # If image is big enough
-        if x.shape[0]>=patch_size[0] and x.shape[1]>=patch_size[1]:
+        if x.shape[0] >= patch_size[0] and x.shape[1] >= patch_size[1]:
             # Calculate number of patcher per image
             n_patches_height = math.ceil(x.shape[0] / patch_size[0])
             n_patches_width = math.ceil(x.shape[1] / patch_size[1])
@@ -761,14 +803,18 @@ def create_patches_mito(
             # Create patches
             idx = i % initial_nb_images
             image_name = all_files_names[idx].split('.')[0]
+
+            # Create with grid method
             if cut_or_sample_patch != 'cut':
                 n_samples = (n_patches_height * n_patches_width)
-                _Y, _X = sample_patches_in_image((y,x), patch_size, n_samples, image_name)
-            else :
-                _Y, _X = cut_patches_in_image((y, x), patch_size, (n_patches_height, n_patches_width), image_name, delete_black_patches)
+                _Y, _X = sample_patches_in_image((y, x), patch_size, n_samples, image_name)
+            # Create with random selection among interest areas
+            else:
+                _Y, _X = cut_patches_in_image((y, x), patch_size, (n_patches_height, n_patches_width), image_name,
+                                              delete_black_patches)
             n_patches_per_image = len(_X)
 
-            # If at least on patch is kept within the image
+            # Add the selected patches if at least on patch is kept within the image
             if n_patches_per_image != 0:
                 s = slice(occupied, occupied + n_patches_per_image)
                 X[s], Y[s] = normalization(_X, _Y, x, y, mask, channel)
@@ -801,33 +847,72 @@ def create_patches_mito(
 
 
 def sample_patches_in_image(datas, patch_size, n_samples, image_name, patch_filter=no_background_patches_zscore()):
-    """ sample matching patches of size `patch_size` from all arrays in `datas` """
+    """Sample patches in image with the method of areas of interest focusing, containing mitochondria.
 
-    # TODO: checks
+    Use the previous calculation of how many patches can fulfill the height and width, to approximate the number of
+    patches that can be reasonably generated, to avoid patches repetition.
+
+    Parameters
+    ----------
+    datas : tuple of numpy array (y, x)
+        Where y is GT and x is input
+    patch_size : tuple of int (a, b)
+        Where a is the size of the x-axis and b is the size of the y-axis
+    n_samples : int
+        Number of patches created for this image, according to its size (previously calculated).
+    image_name : str
+        Name of the image in which we cut patches (to save patches)
+    patch_filter : function
+        What function is used to select good patches and avoid background. Here used Z-score.
+
+    Returns
+    -------
+    tuple(y:class:`numpy.ndarray`, x:class:`numpy.ndarray`)
+        Each element of the tuple contains the cut patches of GT and low resolution input respectively
+    """
 
     y, x = datas
     if patch_filter is None:
-        patch_mask = np.ones(y.shape, dtype=np.bool)
+        # Choose to select patches among the whole image
+        area_of_info = np.ones(y.shape, dtype=np.bool)
     else:
-        patch_mask = patch_filter(datas, image_name)
+        # Choose to select patches among specific areas of interest
+        area_of_info = patch_filter(datas, image_name)
 
-    # Get the valid indices
-    border_slices = tuple([slice(s // 2, d - s + s // 2 + 1) for s, d in zip(patch_size, y.shape)])
-    valid_inds = np.where(patch_mask[border_slices])
-    n_valid = len(valid_inds[0])
+    # Checks
+    assert (each_patch_size > 0 and (type(each_patch_size) is int) for each_patch_size in patch_size)
+    assert x.shape == y.shape and x.shape[0] >= patch_size[0] and x.shape[1] >= patch_size[1]
+    assert type(image_name) is str
+    assert n_samples > 0
 
+    # Delineate the zone where the center of future selected patches is possible (with a margin of 1)
+    border_slices = tuple([slice(s // 2, d - s + s // 2 + 1) for s, d in
+                           zip(patch_size, y.shape)])  # This zone is the center of the image
+    # Keep areas of interest only in the center of the image for the selection of patches
+    valid_center_idx = np.where(area_of_info[border_slices])
+
+    # There is no relevant information in the image
+    n_valid = len(valid_center_idx[0])
     if n_valid == 0:
         raise ValueError("'patch_filter' didn't return any region to sample from")
 
-    sample_inds = choice(range(n_valid), n_samples, replace=(n_valid < n_samples))
-    rand_inds = [v[sample_inds] + s.start for s, v in zip(border_slices, valid_inds)]
-    res = [np.stack([data[tuple(slice(_r - (_p // 2), _r + _p - (_p // 2)) for _r, _p in zip(r, patch_size))] for r in
-                     zip(*rand_inds)]) for data in datas]
+    # Chose randomly n_samples center points in areas of interest
+    sample_idx = choice(range(n_valid), n_samples, replace=(n_valid < n_samples))
+    # Obtain the indices of the center points of the selected patch in the global image
+    global_center_idx = [v[sample_idx] + s.start for s, v in zip(border_slices, valid_center_idx)]
+    # Construct the associated patches for (y,x)
+    patches = [
+        np.stack([data[tuple(slice(_r - (_p // 2), _r + _p - (_p // 2)) for _r, _p in zip(r, patch_size))] for r in
+                  zip(*global_center_idx)]) for data in datas]
+    # _r in the center of the patch
+    # _p is the size of the patch
+    # _r - (_p // 2) is the index of the beginning of the patch
+    # _r + _p - (_p // 2) is the index of the end of the patch
 
     # Saving patches
-    y_res, x_res = res
-    for i in range (len(y_res)):
+    y_res, x_res = patches
+    for i in range(len(y_res)):
         save_name = image_name + '_' + str(i) + '.tif'
         save_patch(save_name, (x_res[i], y_res[i]))
 
-    return res
+    return patches

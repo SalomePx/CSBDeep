@@ -80,7 +80,8 @@ if not initial_care:
         raw_data             = raw_data,
         patch_size           = (128,128),
         data_path            = data_dir,
-        transforms           = [flip_vertical, flip_90, flip_180, flip_270, zoom_aug] ,
+        transforms = None,
+        #transforms           = [flip_vertical, flip_90, flip_180, flip_270] ,
         cut_or_sample_patch  = 'sample',
         save_file            = data_dir + '/my_training_' + data_dir + '.npz',
     )
@@ -94,14 +95,14 @@ if not initial_care:
 # -------- Analysis with CARE patch method -----------
 # ----------------------------------------------------
 else:
-    ### Download and extract zip file
+    # Download and extract zip file
     download_and_extract_zip_file(
         url       = 'http://csbdeep.bioimagecomputing.com/example_data/snr_7_binning_2.zip',
         targetdir = 'data',
         verbose   = 1,
     )
 
-    ### Generate training data
+    # Generate training data
     raw_data = RawData.from_folder(
         basepath    = 'data/train',
         source_dirs = ['low'],
@@ -109,7 +110,7 @@ else:
         axes        = 'YX',
     )
 
-    ### Creation of patches
+    # Creation of patches
     X, Y, XY_axes = create_patches(
         raw_data            = raw_data,
         patch_size          = (128, 128),
@@ -117,8 +118,8 @@ else:
         patch_filter        = no_background_patches(0),
         save_file           = 'data/my_training_data_bis.npz',
     )
-    ### Split into training and validation data
-    (X,Y), (X_val,Y_val), axes = load_training_data('data/my_training_data_bis.npz', validation_split=0.05, verbose=True)
+    # Split into training and validation data
+    (X,Y), (X_val,Y_val), axes = load_training_data('data/my_training_data_bis.npz', validation_split=0.1, verbose=True)
     c = axes_dict(axes)['C']
     n_channel_in, n_channel_out = X.shape[c], Y.shape[c]
 
@@ -129,11 +130,10 @@ else:
 if not load:
     ### CARE model
     config = Config(axes, n_channel_in, n_channel_out, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=200)
-    print(config)
     vars(config)
     model = CARE(config, 'my_model', basedir='models')
     model.keras_model.summary()
-    history = model.train(X,Y, validation_data=(X_val,Y_val), epochs=20)
+    history = model.train(X,Y, validation_data=(X_val,Y_val), epochs=5)
 
     ### Plot history
     print(sorted(list(history.history.keys())))
