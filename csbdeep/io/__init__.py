@@ -105,24 +105,24 @@ def load_training_data(file, validation_split=0, axes=None, n_images=None, verbo
         X_t, Y_t = X[-n_val:],  Y[-n_val:]
         X,   Y   = X[:n_train], Y[:n_train]
         assert X.shape[0] == n_train and X_t.shape[0] == n_val
-        X_t = move_channel_for_backend(X_t,channel=channel)
-        Y_t = move_channel_for_backend(Y_t,channel=channel)
+        X_t = move_channel_for_backend(X_t, channel=channel)
+        Y_t = move_channel_for_backend(Y_t, channel=channel)
 
-    X = move_channel_for_backend(X,channel=channel)
-    Y = move_channel_for_backend(Y,channel=channel)
+    X = move_channel_for_backend(X, channel=channel)
+    Y = move_channel_for_backend(Y, channel=channel)
 
-    axes = axes.replace('C','') # remove channel
+    axes = axes.replace('C', '')  # remove channel
     if backend_channels_last():
         axes = axes+'C'
     else:
         axes = axes[:1]+'C'+axes[1:]
 
-    data_val = (X_t,Y_t) if validation_split > 0 else None
+    data_val = (X_t, Y_t) if validation_split > 0 else None
 
     if verbose:
         ax = axes_dict(axes)
-        n_train, n_val = len(X), len(X_t) if validation_split>0 else 0
-        image_size = tuple( X.shape[ax[a]] for a in axes if a in 'TZYX' )
+        n_train, n_val = len(X), len(X_t) if validation_split > 0 else 0
+        image_size = tuple(X.shape[ax[a]] for a in axes if a in 'TZYX')
         n_dim = len(image_size)
         n_channel_in, n_channel_out = X.shape[ax['C']], Y.shape[ax['C']]
 

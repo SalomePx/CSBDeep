@@ -32,25 +32,24 @@ class ParameterDecayCallback(Callback):
             print("\n[ParameterDecayCallback] new %s: %s\n" % (self.name if self.name else 'parameter', new_val))
 
 
-def prepare_model(model, optimizer, loss, metrics=('mse','mae'),
+def prepare_model(model, optimizer, loss, metrics=('mse','mae','ssim','snr'),
                   loss_bg_thresh=0, loss_bg_decay=0.06, Y=None):
     """ TODO """
 
-    isinstance(optimizer,Optimizer) or _raise(ValueError())
+    isinstance(optimizer, Optimizer) or _raise(ValueError())
 
+    loss_standard = eval('loss_%s()'%loss)
+    _metrics      = [eval('loss_%s()'%m) for m in metrics]
+    callbacks     = [TerminateOnNaN()]
 
-    loss_standard   = eval('loss_%s()'%loss)
-    _metrics        = [eval('loss_%s()'%m) for m in metrics]
-    callbacks       = [TerminateOnNaN()]
-
-    # checks
+    # Checks
     assert 0 <= loss_bg_thresh <= 1
     assert loss_bg_thresh == 0 or Y is not None
     if loss == 'laplace':
         assert K.image_data_format() == "channels_last", "TODO"
         assert model.output.shape.as_list()[-1] >= 2 and model.output.shape.as_list()[-1] % 2 == 0
 
-    # loss
+    # Loss
     if loss_bg_thresh == 0:
         _loss = loss_standard
     else:
@@ -66,8 +65,7 @@ def prepare_model(model, optimizer, loss, metrics=('mse','mae'),
         if not loss in metrics:
             _metrics.append(loss_standard)
 
-
-    # compile model
+    # Compile model
     model.compile(optimizer=optimizer, loss=_loss, metrics=_metrics)
 
     return callbacks

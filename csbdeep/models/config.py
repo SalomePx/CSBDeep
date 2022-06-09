@@ -28,9 +28,9 @@ class BaseConfig(argparse.Namespace):
         # not (ax['Z'] and ax['T']) or _raise(ValueError('using Z and T axes together not supported.'))
 
         axes.startswith('S') or (not ax['S']) or _raise(ValueError('sample axis S must be first.'))
-        axes = axes.replace('S','') # remove sample axis if it exists
+        axes = axes.replace('S', '')  # remove sample axis if it exists
 
-        n_dim = len(axes.replace('C',''))
+        n_dim = len(axes.replace('C', ''))
 
         # TODO: Config not independent of backend. Problem?
         # could move things around during train/predict as an alternative... good idea?
@@ -48,8 +48,8 @@ class BaseConfig(argparse.Namespace):
 
         self.n_dim                  = n_dim
         self.axes                   = axes
-        self.n_channel_in           = int(max(1,n_channel_in))
-        self.n_channel_out          = int(max(1,n_channel_out))
+        self.n_channel_in           = int(max(1, n_channel_in))
+        self.n_channel_out          = int(max(1, n_channel_out))
 
         self.train_checkpoint       = 'weights_best.h5'
         self.train_checkpoint_last  = 'weights_last.h5'
@@ -74,8 +74,6 @@ class BaseConfig(argparse.Namespace):
                 raise AttributeError("Not allowed to add new parameters (%s)" % ', '.join(attr_new))
         for k in kwargs:
             setattr(self, k, kwargs[k])
-
-
 
 
 class Config(BaseConfig):
@@ -138,7 +136,7 @@ class Config(BaseConfig):
         .. _ReduceLROnPlateau: https://keras.io/callbacks/#reducelronplateau
     """
 
-    def __init__(self, axes='YX', n_channel_in=1, n_channel_out=1, probabilistic=False, allow_new_parameters=False, **kwargs):
+    def __init__(self, axes='YX', n_channel_in=1, n_channel_out=1, train_loss='mae', probabilistic=False, allow_new_parameters=False, **kwargs):
         """See class docstring."""
 
         super(Config, self).__init__(axes, n_channel_in, n_channel_out)
@@ -157,7 +155,7 @@ class Config(BaseConfig):
         else:
             self.unet_input_shape  = (self.n_channel_in,) + self.n_dim*(None,)
 
-        self.train_loss            = 'laplace' if self.probabilistic else 'mae'
+        self.train_loss            = 'laplace' if self.probabilistic else train_loss
         self.train_epochs          = 100
         self.train_steps_per_epoch = 400
         self.train_learning_rate   = 0.0004
@@ -220,7 +218,7 @@ class Config(BaseConfig):
         )
         ok['train_loss'] = (
             (    self.probabilistic and self.train_loss == 'laplace'   ) or
-            (not self.probabilistic and self.train_loss in ('mse','mae'))
+            (not self.probabilistic and self.train_loss in ('mse','mae','ssim','snr'))
         )
         ok['train_epochs']          = _is_int(self.train_epochs,1)
         ok['train_steps_per_epoch'] = _is_int(self.train_steps_per_epoch,1)

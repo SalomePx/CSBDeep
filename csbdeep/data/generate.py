@@ -3,17 +3,11 @@ from __future__ import print_function, unicode_literals, absolute_import, divisi
 from six.moves import range, zip, map, reduce, filter
 from six import string_types
 
-from scipy.ndimage.filters import maximum_filter, minimum_filter
-from scipy.ndimage.filters import gaussian_filter
-from matplotlib import pyplot as plt
 from itertools import chain
 import sys, os, warnings
-import random
 
 from tqdm import tqdm
 import numpy as np
-import shutil
-from PIL import Image
 import math
 import cv2
 
@@ -21,9 +15,23 @@ from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_c
     normalize, create_patch_dir, create_dir
 from .patch_selection import patch_is_valid_care, patch_is_valid_occupation
 from .transform import Transform, permute_axes, broadcast_target
-from ..internals.losses import signal_to_noise
+from skimage.metrics import structural_similarity as ssim
+from ..internals.losses import SNR, PSNR
 from ..io import save_training_data
 from ..utils.six import Path
+
+def snrr(y_pred, y_true):
+    mean_image = np.mean(y_true)
+    noise = y_pred - y_true
+    mean_noise = np.mean(noise)
+    noise_diff = noise - mean_noise
+    var_noise = np.sum(np.mean(noise_diff ** 2))  ## variance of noise
+
+    if var_noise == 0:
+        snr = 100  ## clean image
+    else:
+        snr = (np.log10(mean_image / var_noise)) * 20
+    return snr
 
 
 ## Patch filter
@@ -121,8 +129,7 @@ def no_background_patches_zscore(threshold=0.2, percentile=99.9):
     return _filter
 
 
-## Sample patches
-
+# Sample patches
 def sample_patches_from_multiple_stacks(datas, patch_size, n_samples, datas_mask=None, patch_filter=None,
                                         verbose=False):
     """ sample matching patches of size `patch_size` from all arrays in `datas` """
@@ -166,7 +173,7 @@ def sample_patches_from_multiple_stacks(datas, patch_size, n_samples, datas_mask
     return res
 
 
-## Create training data
+# Create training data
 def _valid_low_high_percentiles(ps):
     return isinstance(ps, (list, tuple, np.ndarray)) and len(ps) == 2 and all(map(np.isscalar, ps)) and (
             0 <= ps[0] < ps[1] <= 100)
@@ -356,10 +363,10 @@ def create_patches(
     n_patches = n_images * n_patches_per_image
     n_required_memory_bytes = 2 * n_patches * np.prod(patch_size) * 4
 
-    ## memory check
+    # Memory check
     _memory_check(n_required_memory_bytes)
 
-    ## summary
+    # Summary
     if verbose:
         print('=' * 66)
         print('%5d raw images x %4d transformations   = %5d images' % (n_raw_images, n_transforms, n_images))
@@ -379,7 +386,7 @@ def create_patches(
 
     sys.stdout.flush()
 
-    ## sample patches from each pair of transformed raw images
+    # Sample patches from each pair of transformed raw images
     X = np.empty((n_patches,) + tuple(patch_size), dtype=np.float32)
     Y = np.empty_like(X)
 
@@ -730,7 +737,7 @@ def create_patches_mito(
     all_files_names = sorted(os.listdir(data_path + '/train/GT'))
     initial_nb_images = raw_data.size
 
-    # Create one generator for all transforms
+    # Create one generator of generators for all transforms
     all_image_pairs = [raw_data.generator() for _ in range(nb_transforms)]
     tf = Transform(*zip(*transforms))
     generators = [gen(image_pair) for gen, image_pair in zip(tf.generator, all_image_pairs)]
@@ -782,6 +789,15 @@ def create_patches_mito(
     print("Building data patches:")
     occupied = 0
     for i, (x, y, _axes, mask) in tqdm(list_image_pair, total=len(list_image_pair), disable=(not verbose)):
+
+        idx = i % initial_nb_images
+        image_name = all_files_names[idx].split('.')[0]
+
+        # Print metrics on input images
+        #x_norm = x * 255 / x.max()
+        #y_norm = y * 255 / y.max()
+        #print(f"{image_name}: PSNR: {PSNR(x_norm, y_norm)} - SSIM: {ssim(x_norm, y_norm, data_range=255)}")
+
         if i == 0:
             axes = axes_check_and_normalize(_axes, len(patch_size))
             channel = axes_dict(axes)['C']
@@ -801,9 +817,6 @@ def create_patches_mito(
             n_patches_width = math.ceil(x.shape[1] / patch_size[1])
 
             # Create patches
-            idx = i % initial_nb_images
-            image_name = all_files_names[idx].split('.')[0]
-
             # Create with grid method
             if cut_or_sample_patch != 'cut':
                 n_samples = (n_patches_height * n_patches_width)
@@ -868,7 +881,7 @@ def sample_patches_in_image(datas, patch_size, n_samples, image_name, patch_filt
     Returns
     -------
     tuple(y:class:`numpy.ndarray`, x:class:`numpy.ndarray`)
-        Each element of the tuple contains the cut patches of GT and low resolution input respectively
+        Each element of the tuple contains the sampled patches of GT and low resolution input respectively
     """
 
     y, x = datas
@@ -886,8 +899,7 @@ def sample_patches_in_image(datas, patch_size, n_samples, image_name, patch_filt
     assert n_samples > 0
 
     # Delineate the zone where the center of future selected patches is possible (with a margin of 1)
-    border_slices = tuple([slice(s // 2, d - s + s // 2 + 1) for s, d in
-                           zip(patch_size, y.shape)])  # This zone is the center of the image
+    border_slices = tuple([slice(s // 2, d - s + s // 2 + 1) for s, d in  zip(patch_size, y.shape)])  # This zone is the center of the image
     # Keep areas of interest only in the center of the image for the selection of patches
     valid_center_idx = np.where(area_of_info[border_slices])
 
@@ -901,8 +913,7 @@ def sample_patches_in_image(datas, patch_size, n_samples, image_name, patch_filt
     # Obtain the indices of the center points of the selected patch in the global image
     global_center_idx = [v[sample_idx] + s.start for s, v in zip(border_slices, valid_center_idx)]
     # Construct the associated patches for (y,x)
-    patches = [
-        np.stack([data[tuple(slice(_r - (_p // 2), _r + _p - (_p // 2)) for _r, _p in zip(r, patch_size))] for r in
+    patches = [np.stack([data[tuple(slice(_r - (_p // 2), _r + _p - (_p // 2)) for _r, _p in zip(r, patch_size))] for r in
                   zip(*global_center_idx)]) for data in datas]
     # _r in the center of the patch
     # _p is the size of the patch

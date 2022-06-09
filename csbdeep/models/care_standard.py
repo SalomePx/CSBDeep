@@ -126,7 +126,7 @@ class CARE(BaseModel):
             if 'verbose' not in rlrop_params:
                 rlrop_params['verbose'] = True
             # TF2: add as first callback to put 'lr' in the logs for TensorBoard
-            self.callbacks.insert(0,ReduceLROnPlateau(**rlrop_params))
+            self.callbacks.insert(0, ReduceLROnPlateau(**rlrop_params))
 
         self._model_prepared = True
 
@@ -153,7 +153,7 @@ class CARE(BaseModel):
             See `Keras training history <https://keras.io/models/model/#fit>`_.
 
         """
-        ((isinstance(validation_data,(list,tuple)) and len(validation_data)==2)
+        ((isinstance(validation_data, (list, tuple)) and len(validation_data)==2)
             or _raise(ValueError('validation_data must be a pair of numpy arrays')))
 
         n_train, n_val = len(X), len(validation_data[0])
@@ -164,7 +164,7 @@ class CARE(BaseModel):
         axes = axes_check_and_normalize('S'+self.config.axes,X.ndim)
         ax = axes_dict(axes)
 
-        for a,div_by in zip(axes,self._axes_div_by(axes)):
+        for a, div_by in zip(axes, self._axes_div_by(axes)):
             n = X.shape[ax[a]]
             if n % div_by != 0:
                 raise ValueError(
@@ -185,7 +185,6 @@ class CARE(BaseModel):
             self.callbacks.append(CARETensorBoardImage(model=self.keras_model, data=validation_data,
                                                        log_dir=str(self.logdir/'logs'/'images'),
                                                        n_images=3, prob_out=self.config.probabilistic))
-
         training_data = train.DataWrapper(X, Y, self.config.train_batch_size, length=epochs*steps_per_epoch)
 
         fit = self.keras_model.fit_generator if IS_TF_1 else self.keras_model.fit

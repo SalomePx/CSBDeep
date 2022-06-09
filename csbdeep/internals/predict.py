@@ -1,12 +1,16 @@
 from __future__ import print_function, unicode_literals, absolute_import, division
 from six.moves import range, zip, map, reduce, filter
 
+from ..utils import _raise, consume, move_channel_for_backend, backend_channels_last, axes_check_and_normalize, axes_dict, create_dir, normalize_0_255
+from csbdeep.internals.losses import SNR, PSNR
+
+from skimage.metrics import structural_similarity as ssim
+from tifffile import imread
 from tqdm import tqdm
-from ..utils import _raise, consume, move_channel_for_backend, backend_channels_last, axes_check_and_normalize, axes_dict
-import warnings
 import numpy as np
-
-
+import warnings
+import cv2
+import os
 
 def to_tensor(x,channel=None,single_sample=True):
     if single_sample:
@@ -14,22 +18,19 @@ def to_tensor(x,channel=None,single_sample=True):
         if channel is not None and channel >= 0:
             channel += 1
     if channel is None:
-        x, channel = np.expand_dims(x,-1), -1
-    return move_channel_for_backend(x,channel)
-
+        x, channel = np.expand_dims(x, -1), -1
+    return move_channel_for_backend(x, channel)
 
 
 def from_tensor(x,channel=-1,single_sample=True):
     return np.moveaxis((x[0] if single_sample else x), (-1 if backend_channels_last() else 1), channel)
 
 
-
 def tensor_num_channels(x):
     return x.shape[-1 if backend_channels_last() else 1]
 
 
-
-def predict_direct(keras_model,x,axes_in,axes_out=None,**kwargs):
+def predict_direct(keras_model, x, axes_in, axes_out=None, **kwargs):
     """TODO."""
     if axes_out is None:
         axes_out = axes_in
@@ -43,9 +44,9 @@ def predict_direct(keras_model,x,axes_in,axes_out=None,**kwargs):
     return pred
 
 
-
 def predict_tiled(keras_model,x,n_tiles,block_sizes,tile_overlaps,axes_in,axes_out=None,pbar=None,**kwargs):
     """TODO."""
+
 
     if all(t==1 for t in n_tiles):
         pred = predict_direct(keras_model,x,axes_in,axes_out,**kwargs)
@@ -83,14 +84,13 @@ def predict_tiled(keras_model,x,n_tiles,block_sizes,tile_overlaps,axes_in,axes_o
     assert all(np.isscalar(t) and 1<=t and int(t)==t for t in n_tiles)
 
     # first axis > 1
-    axis = next(i for i,t in enumerate(n_tiles) if t>1)
+    axis = next(i for i, t in enumerate(n_tiles) if t>1)
 
     block_size = block_sizes[axis]
     tile_overlap = tile_overlaps[axis]
     n_block_overlap = int(np.ceil(1.* tile_overlap / block_size))
 
     # print(f"axis={axis},n_tiles={n_tiles[axis]},block_size={block_size},tile_overlap={tile_overlap},n_block_overlap={n_block_overlap}")
-
     n_tiles_remaining = list(n_tiles)
     n_tiles_remaining[axis] = 1
 
@@ -117,7 +117,6 @@ def predict_tiled(keras_model,x,n_tiles,block_sizes,tile_overlaps,axes_in,axes_o
         dst[s_dst] = pred[s_src]
 
     return dst
-
 
 
 class Tile(object):
@@ -181,7 +180,6 @@ class Tile(object):
         return ''.join(s)
 
 
-
 class Tiling(object):
     def __init__(self, n, size, overlap):
         self.n = n
@@ -224,7 +222,6 @@ class Tiling(object):
         return candidates[np.argmin(diffs)]
 
 
-
 def total_n_tiles(x,n_tiles,block_sizes,n_block_overlaps,guarantee='size'):
     assert x.ndim == len(n_tiles) == len(block_sizes) == len(n_block_overlaps)
     assert guarantee in ('size', 'n_tiles')
@@ -237,7 +234,6 @@ def total_n_tiles(x,n_tiles,block_sizes,n_block_overlaps,guarantee='size'):
         elif guarantee == 'n_tiles':
             n_tiles_used *= n_tile
     return n_tiles_used
-
 
 
 def tile_iterator_1d(x,axis,n_tiles,block_size,n_block_overlap,guarantee='size'):
@@ -344,7 +340,6 @@ def tile_iterator_1d(x,axis,n_tiles,block_size,n_block_overlap,guarantee='size')
         assert False
 
 
-
 def tile_iterator(x,n_tiles,block_sizes,n_block_overlaps,guarantee='size'):
     """Tile iterator for n-d arrays.
 
@@ -417,7 +412,6 @@ def tile_iterator(x,n_tiles,block_sizes,n_block_overlaps,guarantee='size'):
     return _accumulate(x, 0, [None]*x.ndim, [None]*x.ndim)
 
 
-
 def tile_overlap(n_depth, kern_size, pool_size=2):
     rf = {(1, 3, 1):    6, (1, 5, 1):   12, (1, 7, 1):   18,
           (2, 3, 1):   10, (2, 5, 1):   20, (2, 7, 1):   30,
@@ -439,7 +433,6 @@ def tile_overlap(n_depth, kern_size, pool_size=2):
         return rf[n_depth, kern_size, pool_size]
     except KeyError:
         raise ValueError('tile_overlap value for n_depth=%d, kern_size=%d, pool_size=%d not available.' % (n_depth, kern_size, pool_size))
-
 
 
 class Progress(object):
@@ -464,3 +457,45 @@ class Progress(object):
         if self.pbar is not None:
             self.pbar.close()
         self.pbar = None
+
+#####################################################################################################################
+############################################## MITOCHONDRIA PART ####################################################
+#####################################################################################################################
+
+
+def restore_and_eval_test(keras_model, axes, data_dir, verbose=True):
+
+    dir_pred = 'savings/predict/'
+    create_dir(dir_pred)
+    images_test = os.listdir(data_dir + '/test/low')
+
+    psnrs = []
+    ssims = []
+
+    if verbose:
+        print('=' * 66)
+
+    for img in images_test:
+
+        name_img = img.split('.')[0]
+        x = imread(data_dir + '/test/low/' + img)
+        y = imread(data_dir + '/test/GT/' + img)
+        restored = keras_model.predict(x, axes)
+        path_save = dir_pred + name_img + '.tif'
+        cv2.imwrite(path_save, restored)
+        print(x.max())
+        print(y.max())
+        print(restored.max())
+        y_norm, x_norm, restored_norm = normalize_0_255((y, x, restored))
+        cv2.imwrite('savings/todelete/restored.tif', restored_norm)
+        psnr_img = PSNR(restored_norm, y_norm)
+        ssim_img = ssim(restored_norm, y_norm, data_range=255)
+        if verbose:
+            print(f"Prediction {name_img} - PSNR: {psnr_img} - SSIM: {ssim_img}")
+        psnrs.append(psnr_img)
+        ssims.append(ssim_img)
+
+    if verbose:
+        print('=' * 66)
+
+    return psnrs, ssims

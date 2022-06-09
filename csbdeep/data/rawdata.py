@@ -12,21 +12,21 @@ import numpy as np
 import cv2
 
 
-class RawData(namedtuple('RawData' ,('generator' ,'size' ,'description'))):
+class RawData(namedtuple('RawData', ('generator', 'size', 'description'))):
     """:func:`collections.namedtuple` with three fields: `generator`, `size`, and `description`.
 
     Parameters
     ----------
-    generator : function
+    generator: function
         Function without arguments that returns a generator that yields tuples `(x,y,axes,mask)`,
         where `x` is a source image (e.g., with low SNR) with `y` being the corresponding target image
         (e.g., with high SNR); `mask` can either be `None` or a boolean array that denotes which
         pixels are eligible to extracted in :func:`create_patches`. Note that `x`, `y`, and `mask`
         must all be of type :class:`numpy.ndarray` and are assumed to have the same shape, where the
         string `axes` indicates the order and presence of axes of all three arrays.
-    size : int
+    size: int
         Number of tuples that the `generator` will yield.
-    description : str
+    description: str
         Textual description of the raw data.
     """
 

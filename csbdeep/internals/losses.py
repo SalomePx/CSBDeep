@@ -6,10 +6,11 @@ from ..utils.tf import keras_import
 
 import tensorflow as tf
 from sklearn.metrics import mean_squared_error
-from tensorflow.keras.losses import MeanSquaredError
-from tensorflow.image import ssim as k_ssim
 
 import numpy as np
+import cv2
+import math
+import random
 import scipy.io
 K = keras_import('backend')
 
@@ -66,36 +67,21 @@ def loss_mse(mean=True):
             return R(K.square(y_pred[:,:n,...] - y_true))
         return mse
 
-def loss_snr(mean=True):
-    R = _mean_or_not(mean)
-    if backend_channels_last():
-        def snr(y_true, y_pred):
-            n = K.shape(y_true)[-1]
-            power_signal = K.var(y_true)
-            divide = tf.cast(n, tf.float32)
-            return R(power_signal / (K.square(y_true - y_pred[:,:n,...])) * divide)
-        return snr
-    else:
-        def snr(y_true, y_pred):
-            n = K.shape(y_true)[1]
-            power_signal = K.var(y_true)
-            divide = tf.cast(n, tf.float32)
-            return R(power_signal / (K.square(y_true - y_pred[:,:n,...])) * (divide**2) )
-        return snr
 
-def loss_ssim(mean=True):
-    R = _mean_or_not(mean)
-    if backend_channels_last():
-        def ssim(y_true, y_pred):
-            n = K.shape(y_true)[-1]
-            R(k_ssim(y_true, y_pred[...,:n], max_val=255))
-        return ssim
-    else:
-        def ssim(y_true, y_pred):
-            n = K.shape(y_true)[1]
-            print(y_true)
-            return R(k_ssim(y_true, y_pred[:,:n,...], max_val=255))
-        return ssim
+def loss_snr():
+    def snr(y_true, y_pred):
+        y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
+        y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
+        return tf.reduce_mean(tf.image.psnr(y_true_norm, y_pred_norm, 255))
+    return snr
+
+
+def loss_ssim():
+    def ssim(y_true, y_pred):
+        y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
+        y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
+        return - tf.reduce_mean(tf.image.ssim(y_true_norm, y_pred_norm, 255))
+    return ssim
 
 
 def loss_thresh_weighted_decay(loss_per_pixel, thresh, w1, w2, alpha):
@@ -108,7 +94,7 @@ def loss_thresh_weighted_decay(loss_per_pixel, thresh, w1, w2, alpha):
     return _loss
 
 
-def signal_to_noise(pred, target):
+def SNR(pred, target):
     """
     Compute Signal to Noise Ratio (SNR) of two images.
     Parameters
@@ -128,6 +114,14 @@ def signal_to_noise(pred, target):
     ratio = target_var / noise_var
 
     return 10.0 * np.log10(ratio)
+
+def PSNR(pred, target):
+    mse = np.mean((target - pred) ** 2)
+    if mse == 0:
+        return 100
+    max_pixel = 255.0
+    psnr = 20 * math.log10(max_pixel / math.sqrt(mse))
+    return psnr
 
 
 

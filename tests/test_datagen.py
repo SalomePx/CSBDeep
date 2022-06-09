@@ -115,20 +115,20 @@ def test_create_save_and_load(tmpdir):
 
     n_images, n_patches_per_image = 2, 4
     def _create(img_size,img_axes,patch_size,patch_axes):
-        U,V = (rng.uniform(size=(n_images,)+img_size) for _ in range(2))
-        X,Y,XYaxes = create_patches (
-            raw_data            = RawData.from_arrays(U,V,img_axes),
+        U, V = (rng.uniform(size=(n_images,)+img_size) for _ in range(2))
+        X, Y, XYaxes = create_patches(
+            raw_data            = RawData.from_arrays(U, V, img_axes),
             patch_size          = patch_size,
             patch_axes          = patch_axes,
             n_patches_per_image = n_patches_per_image,
             save_file           = save_file
         )
-        (_X,_Y), val_data, _XYaxes = load_training_data(save_file,verbose=True)
+        (_X, _Y), val_data, _XYaxes = load_training_data(save_file,verbose=True)
         assert val_data is None
         assert _XYaxes[-1 if backend_channels_last else 1] == 'C'
-        _X,_Y = (move_image_axes(u,fr=_XYaxes,to=XYaxes) for u in (_X,_Y))
-        assert np.allclose(X,_X,atol=1e-6)
-        assert np.allclose(Y,_Y,atol=1e-6)
+        _X, _Y = (move_image_axes(u, fr=_XYaxes, to=XYaxes) for u in (_X, _Y))
+        assert np.allclose(X, _X, atol=1e-6)
+        assert np.allclose(Y, _Y, atol=1e-6)
         assert set(XYaxes) == set(_XYaxes)
         assert load_training_data(save_file,validation_split=0.5)[2] is not None
         assert all(len(x)==3 for x in load_training_data(save_file,n_images=3)[0])

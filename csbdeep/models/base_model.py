@@ -206,7 +206,6 @@ class BaseModel(object):
             if self.config.train_checkpoint_last is not None:
                 self.keras_model.save_weights(str(self.logdir / self.config.train_checkpoint_last))
             if self.config.train_checkpoint is not None:
-                print()
                 self._find_and_load_weights(self.config.train_checkpoint)
             if self.config.train_checkpoint_epoch is not None:
                 try:
@@ -253,8 +252,8 @@ class BaseModel(object):
             normalizer = NoNormalizer()
         if resizer is None:
             resizer = NoResizer()
-        isinstance(resizer,Resizer) or _raise(ValueError())
-        isinstance(normalizer,Normalizer) or _raise(ValueError())
+        isinstance(resizer, Resizer) or _raise(ValueError())
+        isinstance(normalizer, Normalizer) or _raise(ValueError())
         if normalizer.do_after:
             if self.config.n_channel_in != self.config.n_channel_out:
                 warnings.warn('skipping normalization step after prediction because ' +
