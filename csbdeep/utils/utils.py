@@ -346,8 +346,8 @@ def create_dir(dir_name):
 
 
 def normalize_0_255(datas):
-    y, x, restored = datas
-    restored_norm = restored * 255 / restored.max()
-    x_norm = x * 255 / x.max()
-    y_norm = y * 255 / y.max()
-    return y_norm, x_norm, restored_norm
+    normalized = []
+    for i in range(len(datas)):
+        norm = datas[i] * 255 / datas[i].max()
+        normalized.append(norm)
+    return normalized

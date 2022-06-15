@@ -15,8 +15,6 @@ from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_c
     normalize, create_patch_dir, create_dir
 from .patch_selection import patch_is_valid_care, patch_is_valid_occupation
 from .transform import Transform, permute_axes, broadcast_target
-from skimage.metrics import structural_similarity as ssim
-from ..internals.losses import SNR, PSNR
 from ..io import save_training_data
 from ..utils.six import Path
 
@@ -114,15 +112,16 @@ def no_background_patches_zscore(threshold=0.2, percentile=99.9):
     (np.isscalar(percentile) and 0 <= percentile <= 100) or _raise(ValueError())
     (np.isscalar(threshold) and 0 <= threshold <= 1) or _raise(ValueError())
 
-    def _filter(datas, image_name, dtype=np.float32):
-        y, x = datas
+    def _filter(y, image_name=None, dtype=np.float32, save=True):
         if dtype is not None:
             y = y.astype(dtype)
 
         # Make max filter patch_size smaller to avoid only few non-bg pixel close to image border
         filtered = (y - np.median(y)) / np.std(y)
         filtered = np.where(filtered < 0, 0, filtered)
-        cv2.imwrite("savings/filtered_images/" + image_name + ".tif", filtered)
+
+        if save:
+            cv2.imwrite("savings/filtered_images/" + image_name + ".tif", filtered)
 
         return filtered > threshold * np.percentile(filtered, percentile)
 
@@ -147,7 +146,8 @@ def sample_patches_from_multiple_stacks(datas, patch_size, n_samples, datas_mask
     if patch_filter is None:
         patch_mask = np.ones(datas[0].shape, dtype=np.bool)
     else:
-        patch_mask = patch_filter(datas, patch_size)
+        y,x = datas
+        patch_mask = patch_filter(y, patch_size)
 
     if datas_mask is not None:
         # TODO: Test this
@@ -582,16 +582,17 @@ def cut_patches_in_image(datas, patch_size, n_sample_size, image_name, delete_bl
     assert (each_patch_size > 0 and (type(each_patch_size) is int) for each_patch_size in patch_size)
     assert x.shape == y.shape and x.shape[0] >= patch_size[0] and x.shape[1] >= patch_size[1]
     assert type(image_name) is str
-    assert n_sample_size > 0
+    assert n_sample_size[0] > 0 and n_sample_size[1] > 0
     assert 0 <= occup_min <= 1 and 0 <= threshold <= 1 and 0 <= percentile <= 100
 
+
     # Normalization of data
-    x = x * 255.0 / x.max()
-    y = y * 255.0 / y.max()
+    x_norm = x * 255.0 / x.max()
+    y_norm = y * 255.0 / y.max()
 
     # Apply filter (Z-score) on images for detection of black filters if wanted
     if delete_black_patches:
-        filtered = (y - np.median(y)) / np.std(y)
+        filtered = (y_norm - np.median(y_norm)) / np.std(y_norm)
         filtered = np.where(filtered < 0, 0, filtered)
         y_filter = np.where(filtered > threshold * np.percentile(filtered, percentile), 1, 0)
         cv2.imwrite("savings/filtered_images/" + image_name + ".tif", filtered)
@@ -633,13 +634,15 @@ def cut_patches_in_image(datas, patch_size, n_sample_size, image_name, delete_bl
             # Finally
             patch_x, patch_y = x[start_height:end_height, start_width:end_width], y[start_height:end_height,
                                                                                   start_width:end_width]
+            patch_x_norm, patch_y_norm = x_norm[start_height:end_height, start_width:end_width], y_norm[start_height:end_height,
+                                                                                  start_width:end_width]
             if delete_black_patches:
                 patch_y_bool = y_filter[start_height:end_height, start_width:end_width]
                 patch_y_filter = filtered[start_height:end_height, start_width:end_width]
 
             # Keep patch or not
             if delete_black_patches:
-                ys = [patch_y, patch_y_bool, patch_y_filter]
+                ys = [patch_y_norm, patch_y_bool, patch_y_filter]
                 admission = patch_is_valid_occupation(ys, image_name, nb_patch, occup_min)
             else:
                 admission = True
@@ -727,8 +730,7 @@ def create_patches_mito(
     transforms = list(transforms)
     if patch_axes is not None:
         transforms.append(permute_axes(patch_axes))
-    if len(transforms) == 0:
-        transforms.append(Transform.identity())
+    transforms.append(Transform.identity())
 
     if normalization is None:
         normalization = lambda patches_x, patches_y, x, y, mask, channel: (patches_x, patches_y)
@@ -763,6 +765,7 @@ def create_patches_mito(
     list_image_pair = list(enumerate(image_pairs))
     image_pair_iter = list_image_pair[:]
     for _, (x, y, _axes, mask) in image_pair_iter:
+
         if x.shape[0] >= patch_size[0] and x.shape[1] >= patch_size[1]:
             # Calculate the number of patches per image and total final images
             n_patches_height = math.ceil(x.shape[0] / patch_size[0])
@@ -783,7 +786,6 @@ def create_patches_mito(
     create_patch_dir('savings/patches')
     create_dir('savings/deleted_patches')
     create_dir('savings/filtered_images')
-    create_dir('savings/todelete')
 
     # Create patches for each image
     print("Building data patches:")
@@ -791,7 +793,8 @@ def create_patches_mito(
     for i, (x, y, _axes, mask) in tqdm(list_image_pair, total=len(list_image_pair), disable=(not verbose)):
 
         idx = i % initial_nb_images
-        image_name = all_files_names[idx].split('.')[0]
+        tfm = i // initial_nb_images
+        image_name = all_files_names[idx].split('.')[0] + '_' + str(tfm)
 
         # Print metrics on input images
         #x_norm = x * 255 / x.max()
@@ -890,7 +893,7 @@ def sample_patches_in_image(datas, patch_size, n_samples, image_name, patch_filt
         area_of_info = np.ones(y.shape, dtype=np.bool)
     else:
         # Choose to select patches among specific areas of interest
-        area_of_info = patch_filter(datas, image_name)
+        area_of_info = patch_filter(y, image_name)
 
     # Checks
     assert (each_patch_size > 0 and (type(each_patch_size) is int) for each_patch_size in patch_size)

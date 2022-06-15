@@ -66,7 +66,7 @@ def prepare_model(model, optimizer, loss, metrics=('mse','mae','ssim','snr'),
             _metrics.append(loss_standard)
 
     # Compile model
-    model.compile(optimizer=optimizer, loss=_loss, metrics=_metrics)
+    model.compile(optimizer=optimizer, loss=_loss, metrics=_metrics, run_eagerly=True)
 
     return callbacks
 

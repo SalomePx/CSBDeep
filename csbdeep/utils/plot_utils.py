@@ -48,9 +48,9 @@ def plot_some(*arr, **kwargs):
 
     """
     title_list = kwargs.pop('title_list',None)
-    pmin = kwargs.pop('pmin',0)
-    pmax = kwargs.pop('pmax',100)
-    cmap = kwargs.pop('cmap','magma')
+    pmin = kwargs.pop('pmin', 0)
+    pmax = kwargs.pop('pmax', 100)
+    cmap = kwargs.pop('cmap', 'magma')
     imshow_kwargs = kwargs
     return _plot_some(arr=arr, title_list=title_list, pmin=pmin, pmax=pmax, cmap=cmap, **imshow_kwargs)
 
@@ -82,9 +82,9 @@ def _plot_some(arr, title_list=None, pmin=0, pmax=100, cmap='magma', **imshow_kw
         proj_axis = tuple(range(1, 1 + max(0, a[0].ndim - ndim_allowed)))
         return np.max(a, axis=proj_axis)
 
-    arr = map(make_acceptable,arr)
-    arr = map(color_image,arr)
-    arr = map(max_project,arr)
+    arr = map(make_acceptable, arr)
+    arr = map(color_image, arr)
+    arr = map(max_project, arr)
     arr = list(arr)
 
     h = len(arr)

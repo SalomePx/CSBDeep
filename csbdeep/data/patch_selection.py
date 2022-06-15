@@ -1,19 +1,9 @@
 from __future__ import print_function, unicode_literals, absolute_import, division
-from six.moves import range, zip, map, reduce, filter
-from six import string_types
 
-from scipy.ndimage.filters import maximum_filter
-from matplotlib import pyplot as plt
-from itertools import chain
-import sys, os, warnings
-import random
-
-from tqdm import tqdm
 import numpy as np
 import shutil
 from PIL import Image
 import cv2
-import math
 
 def patch_is_valid_care(patches, image_name, nb_patch):
     """ Check whether a patch is relevant, contains enough info, or is only background
@@ -79,7 +69,7 @@ def patch_is_valid_occupation(patches, image_name, nb_patch, occup_min, verbose=
     if occupation < occup_min:
         if verbose:
             print("DELETED PATCH ")
-        cv2.imwrite("deleted_patches/" + image_name + '_' + str(nb_patch) + ".png", patch_y)
+        cv2.imwrite("savings/deleted_patches/" + image_name + '_' + str(nb_patch) + ".png", patch_y)
         return False
 
     return True

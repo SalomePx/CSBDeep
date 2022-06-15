@@ -1,13 +1,15 @@
 from __future__ import print_function, unicode_literals, absolute_import, division
 from six.moves import range, zip, map, reduce, filter
 
-from ..utils import _raise, consume, move_channel_for_backend, backend_channels_last, axes_check_and_normalize, axes_dict, create_dir, normalize_0_255
+from ..utils import _raise, consume, move_channel_for_backend, backend_channels_last, axes_check_and_normalize, axes_dict, create_dir, normalize_0_255, plot_some, save_figure
 from csbdeep.internals.losses import SNR, PSNR
 
 from skimage.metrics import structural_similarity as ssim
+import matplotlib.pyplot as plt
 from tifffile import imread
 from tqdm import tqdm
 import numpy as np
+from math import *
 import warnings
 import cv2
 import os
@@ -463,39 +465,93 @@ class Progress(object):
 #####################################################################################################################
 
 
-def restore_and_eval_test(keras_model, axes, data_dir, verbose=True):
+def restore_and_eval_test(keras_model, axes, data_dir, moment, verbose=True):
 
-    dir_pred = 'savings/predict/'
+    dir_pred = 'fig/' + moment + '/predict/'
     create_dir(dir_pred)
     images_test = os.listdir(data_dir + '/test/low')
 
     psnrs = []
     ssims = []
+    maes = []
+    mses = []
 
     if verbose:
         print('=' * 66)
 
-    for img in images_test:
+    for i, img in enumerate(images_test):
 
         name_img = img.split('.')[0]
         x = imread(data_dir + '/test/low/' + img)
         y = imread(data_dir + '/test/GT/' + img)
         restored = keras_model.predict(x, axes)
+
+        if i < 5:
+            plt.figure(figsize=(15, 10))
+            plot_some(np.stack([x, restored, y]), title_list=[['low', 'CARE', 'GT']], pmin=2, pmax=99.8)
+            psnrs_plot, ssims_plot, psnrs_low_plot, ssims_low_plot = restore_and_eval((y, x, restored), original=True)
+            plt.suptitle(f"Low: PSNR: {round(psnrs_low_plot[0], 2)} - SSIM: {round(ssims_low_plot[0], 2)}\n"
+                         f"Prediction: PSNR: {round(psnrs_plot[0], 2)} - SSIM: {round(ssims_plot[0], 2)}")
+            save_figure(moment, '1pred_' + str(name_img))
+
         path_save = dir_pred + name_img + '.tif'
         cv2.imwrite(path_save, restored)
-        print(x.max())
-        print(y.max())
-        print(restored.max())
-        y_norm, x_norm, restored_norm = normalize_0_255((y, x, restored))
-        cv2.imwrite('savings/todelete/restored.tif', restored_norm)
+        y_norm, x_norm, restored_norm = normalize_0_255([y, x, restored])
         psnr_img = PSNR(restored_norm, y_norm)
         ssim_img = ssim(restored_norm, y_norm, data_range=255)
+        mae_img = np.mean(np.abs(y_norm - restored_norm))
+        mse_img = np.square(np.subtract(y_norm, restored_norm)).mean()
+
+
         if verbose:
-            print(f"Prediction {name_img} - PSNR: {psnr_img} - SSIM: {ssim_img}")
+            print(f"Prediction {name_img, 2} - PSNR: {round(psnr_img, 2)} - SSIM: {round(ssim_img, 2)} - MAE: {mae_img}  - MSE: {mse_img}")
+        psnrs.append(psnr_img)
+        ssims.append(ssim_img)
+        maes.append(mae_img)
+        mses.append(mse_img)
+
+    if verbose:
+        print(f"Mean of testing predictions: PSNR: {round(np.mean(psnrs), 2)} - SSIM: {round(np.mean(ssims), 2)} - MAE: {np.mean(maes)} - MSE: {np.mean(mses)} ")
+        print('=' * 66)
+
+    return psnrs, ssims, maes, mses
+
+
+def restore_and_eval(datas, original=False):
+
+    Y_val, X_val, restored_val = datas
+    psnrs = []
+    ssims = []
+    psnrs_low = []
+    ssims_low = []
+    one_eval = (True if Y_val.ndim == 2 else False)
+
+    for i in range(len(Y_val)):
+
+        if one_eval:
+            y_norm, x_norm, restored_norm = normalize_0_255([Y_val, X_val, restored_val])
+        else:
+            y, x, restored = Y_val[i].squeeze(), X_val[i].squeeze(), restored_val[i].squeeze()
+            y_norm, x_norm, restored_norm = normalize_0_255([y, x, restored])
+
+        psnr_img = PSNR(restored_norm, y_norm)
+        ssim_img = ssim(restored_norm, y_norm, data_range=255)
         psnrs.append(psnr_img)
         ssims.append(ssim_img)
 
-    if verbose:
-        print('=' * 66)
+        if original:
+            psnr_low = PSNR(x_norm, y_norm)
+            ssim_low = ssim(x_norm, y_norm, data_range=255)
+            psnrs_low.append(psnr_low)
+            ssims_low.append(ssim_low)
+
+        if one_eval:
+            if original:
+                return psnrs, ssims, psnrs_low, ssims_low
+            else:
+                return psnrs, ssims
+
+    if original:
+        return psnrs, ssims, psnrs_low, ssims_low
 
     return psnrs, ssims
