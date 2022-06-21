@@ -18,19 +18,6 @@ from .transform import Transform, permute_axes, broadcast_target
 from ..io import save_training_data
 from ..utils.six import Path
 
-def snrr(y_pred, y_true):
-    mean_image = np.mean(y_true)
-    noise = y_pred - y_true
-    mean_noise = np.mean(noise)
-    noise_diff = noise - mean_noise
-    var_noise = np.sum(np.mean(noise_diff ** 2))  ## variance of noise
-
-    if var_noise == 0:
-        snr = 100  ## clean image
-    else:
-        snr = (np.log10(mean_image / var_noise)) * 20
-    return snr
-
 
 ## Patch filter
 def no_background_patches(threshold=0.4, percentile=99.9):
@@ -112,18 +99,21 @@ def no_background_patches_zscore(threshold=0.2, percentile=99.9):
     (np.isscalar(percentile) and 0 <= percentile <= 100) or _raise(ValueError())
     (np.isscalar(threshold) and 0 <= threshold <= 1) or _raise(ValueError())
 
-    def _filter(y, image_name=None, dtype=np.float32, save=True):
+    def _filter(y, image_name='', dtype=np.float32, save=True):
         if dtype is not None:
             y = y.astype(dtype)
 
         # Make max filter patch_size smaller to avoid only few non-bg pixel close to image border
         filtered = (y - np.median(y)) / np.std(y)
         filtered = np.where(filtered < 0, 0, filtered)
+        mask_filter = filtered > 1
 
         if save:
             cv2.imwrite("savings/filtered_images/" + image_name + ".tif", filtered)
+            zscore_img = np.where(mask_filter != 0, filtered, 0)
+            cv2.imwrite("savings/zscore_images/" + image_name + ".tif", zscore_img)
 
-        return filtered > threshold * np.percentile(filtered, percentile)
+        return mask_filter
 
     return _filter
 
@@ -146,8 +136,7 @@ def sample_patches_from_multiple_stacks(datas, patch_size, n_samples, datas_mask
     if patch_filter is None:
         patch_mask = np.ones(datas[0].shape, dtype=np.bool)
     else:
-        y,x = datas
-        patch_mask = patch_filter(y, patch_size)
+        patch_mask = patch_filter(datas, patch_size)
 
     if datas_mask is not None:
         # TODO: Test this
@@ -786,6 +775,7 @@ def create_patches_mito(
     create_patch_dir('savings/patches')
     create_dir('savings/deleted_patches')
     create_dir('savings/filtered_images')
+    create_dir('savings/zscore_images')
 
     # Create patches for each image
     print("Building data patches:")

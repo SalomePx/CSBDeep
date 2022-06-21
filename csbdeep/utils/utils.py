@@ -6,15 +6,12 @@ import json
 import collections
 import platform
 import random
-from six.moves import range, zip, map, reduce, filter
+from six.moves import range, map, reduce
 from .six import Path
 import matplotlib.pyplot as plt
 from zipfile import ZipFile
 import shutil
 import cv2
-
-
-###
 
 
 def is_tf_backend():
@@ -310,7 +307,7 @@ def save_figure(moment, datatype, xaxis=None, yaxis=None):
     file_name = 'fig/' + moment + '/' + datatype + '.jpg'
     plt.xlabel(xaxis)
     plt.ylabel(yaxis)
-    plt.savefig(file_name)
+    plt.savefig(file_name, bbox_inches='tight')
 
 
 def save_patch(save_name, datas):

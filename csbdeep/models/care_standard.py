@@ -68,9 +68,9 @@ class CARE(BaseModel):
         Path to model folder (which stores configuration, weights, etc.)
     """
 
-    def __init__(self, config, name=None, basedir='.', name_weights=None):
+    def __init__(self, config, name=None, basedir='.', name_weights=None, logdir_save=None):
         """See class docstring."""
-        super(CARE, self).__init__(config=config, name=name, basedir=basedir, name_weights=name_weights)
+        super(CARE, self).__init__(config=config, name=name, basedir=basedir, name_weights=name_weights, logdir_save=logdir_save)
 
 
     def _build(self):
@@ -115,10 +115,10 @@ class CARE(BaseModel):
             if self.config.train_tensorboard:
                 if IS_TF_1:
                     from ..utils.tf import CARETensorBoard
-                    self.callbacks.append(CARETensorBoard(log_dir=str(self.logdir), prefix_with_timestamp=False, n_images=3, write_images=True, prob_out=self.config.probabilistic))
+                    self.callbacks.append(CARETensorBoard(log_dir=str(self.logdir_save), prefix_with_timestamp=False, n_images=3, write_images=True, prob_out=self.config.probabilistic))
                 else:
                     from tensorflow.keras.callbacks import TensorBoard
-                    self.callbacks.append(TensorBoard(log_dir=str(self.logdir/'logs'), write_graph=False, profile_batch=0))
+                    self.callbacks.append(TensorBoard(log_dir=str(self.logdir_save/'logs'), write_graph=False, profile_batch=0))
 
         if self.config.train_reduce_lr is not None:
             ReduceLROnPlateau = keras_import('callbacks', 'ReduceLROnPlateau')
@@ -183,7 +183,7 @@ class CARE(BaseModel):
         if (self.config.train_tensorboard and self.basedir is not None and
             not IS_TF_1 and not any(isinstance(cb,CARETensorBoardImage) for cb in self.callbacks)):
             self.callbacks.append(CARETensorBoardImage(model=self.keras_model, data=validation_data,
-                                                       log_dir=str(self.logdir/'logs'/'images'),
+                                                       log_dir=str(self.logdir_save/'logs'/'images'),
                                                        n_images=3, prob_out=self.config.probabilistic))
         training_data = train.DataWrapper(X, Y, self.config.train_batch_size, length=epochs*steps_per_epoch)
 
@@ -208,7 +208,7 @@ class CARE(BaseModel):
 
         """
         if fname is None:
-            fname = self.logdir / 'TF_SavedModel.zip'
+            fname = self.logdir_save / 'TF_SavedModel.zip'
         else:
             fname = Path(fname)
 

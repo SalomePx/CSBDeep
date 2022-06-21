@@ -14,12 +14,12 @@ from csbdeep.data.transform import flip_vertical, flip_90, flip_180, flip_270, z
 from csbdeep.data import no_background_patches_zscore
 
 from csbdeep.utils import axes_dict, plot_some, plot_history, Path, download_and_extract_zip_file, save_figure, normalize_0_255
+#from csbdeep.utils.plot_utils import plot_multiple_ssim_maps
 from csbdeep.io import load_training_data
 from csbdeep.models import Config, CARE
-from csbdeep.internals.losses import SNR, PSNR, PSNR_focus, SSIM_focus
+from csbdeep.internals.losses import plot_multiple_ssim_maps
 from csbdeep.internals.predict import restore_and_eval_test, restore_and_eval
 from skimage.metrics import structural_similarity
-
 
 # -----------------------------
 # -------- Time saving ----------
@@ -38,63 +38,24 @@ moment = str(month) + '-' + str(day) + '_' + str(hour) + '-' + str(min)
 # Fixed
 initial_care = False
 save_fig = True
-load = False
-testing = True
+predicting = True
 build_data = True
 base_dir = 'fig/' + moment
-tests = False
 
 # Non fixed
 create_patches_with_care = False
 data_dir = 'data_mito_crop'
+multiple_maps = False
+fine_tuning = False
+load = False
 
-# -------------------------
-# -------- Tests ----------
-# -------------------------
-if tests:
-    x = imread('data_mito_crop/test/low/IMG0063.STED.ome.tif')
-    x1 = imread('metric_test/bad/IMG0063.tif')
-    x2 = imread('metric_test/mid/IMG0063.tif')
-    x3 = imread('metric_test/good/IMG0063.tif')
-    x4 = imread('metric_test/vgood/IMG0063.tif')
-    y = imread('data_mito_crop/test/GT/IMG0063.STED.ome.tif')
+# ----------------------------------
+# -------- Plot SSIM maps ----------
+# ----------------------------------
 
-    x, x1, x2, x3, x4, y = normalize_0_255([x, x1, x2, x3, x4, y])
-
-    name_image = "IMG0063"
-    psnr_x, ssim_x = PSNR_focus(x, y, name_image + '_init', save=True), SSIM_focus(x, y, name_image + '_init', save=True)
-    psnr_x1, ssim_x1 = PSNR_focus(x1, y, name_image + '_x1', save=True), SSIM_focus(x1, y, name_image + '_x1', save=True)
-    psnr_x2, ssim_x2 = PSNR_focus(x2, y, name_image + '_x2', save=True), SSIM_focus(x2, y, name_image + '_x2', save=True)
-    psnr_x3, ssim_x3 = PSNR_focus(x3, y, name_image + '_x3', save=True), SSIM_focus(x3, y, name_image + '_x3', save=True)
-    psnr_x4, ssim_x4 = PSNR_focus(x4, y, name_image + '_x4', save=True), SSIM_focus(x4, y, name_image + '_x4', save=True)
-
-    print(f"PSNR init - target: {psnr_x} - SSIM: {ssim_x}")
-    print(f"PSNR bad - target: {psnr_x1} - SSIM: {ssim_x1}")
-    print(f"PSNR mid - target: {psnr_x2} - SSIM: {ssim_x2}")
-    print(f"PSNR good - target: {psnr_x3} - SSIM: {ssim_x3}")
-    print(f"PSNR very good - target: {psnr_x4} - SSIM: {ssim_x4}")
-
-    plt.figure(figsize=(16, 10))
-    ax = plt.subplot(1, 6, 1)
-    ax.set_title(f'PSNR : {psnr_x} - SSIM: {ssim_x}', fontsize=8)
-    plt.imshow(x, cmap='gray')
-    ax1 = plt.subplot(1, 6, 2)
-    ax1.set_title(f'PSNR : {psnr_x1} - SSIM: {ssim_x1}', fontsize=8)
-    plt.imshow(x1, cmap='gray')
-    ax2 = plt.subplot(1, 6, 3)
-    ax2.set_title(f'PSNR : {psnr_x2} - SSIM: {ssim_x2}', fontsize=8)
-    plt.imshow(x2, cmap='gray')
-    ax3 = plt.subplot(1, 6, 4)
-    ax3.set_title(f'PSNR : {psnr_x3} - SSIM: {ssim_x3}', fontsize=8)
-    plt.imshow(x3, cmap='gray')
-    ax4 = plt.subplot(1, 6, 5)
-    ax4.set_title(f'PSNR : {psnr_x4} - SSIM: {ssim_x4}', fontsize=8)
-    plt.imshow(x4, cmap='gray')
-    ax5 = plt.subplot(1, 6, 6)
-    ax5.set_title("Original image", fontsize=8)
-    plt.imshow(y, cmap='gray')
-    plt.savefig("todelete/metrics_" + moment + ".png")
-
+if multiple_maps:
+    name_img = 'IMG0063'
+    plot_multiple_ssim_maps(name_img, moment)
 
 
 # -----------------------------------------------------
@@ -193,43 +154,56 @@ else:
     n_channel_in, n_channel_out = X.shape[c], Y.shape[c]
 
 
-# ----------------------------------
-# -------- Train a model -----------
-# ----------------------------------
+
+# ---------------------------------
+# -------- Train the model --------
+# ---------------------------------
 
 if not load:
-    # CARE model
+    model = CARE(config=None, name='my_model', basedir='models', name_weights='best')
     config = Config(axes, n_channel_in, n_channel_out, train_loss='mae', unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=88)
     vars(config)
     model = CARE(config, 'my_model', basedir=base_dir)
     model.keras_model.summary()
-    history = model.train(X, Y, validation_data=(X_val, Y_val), epochs=10)
+    history = model.train(X, Y, validation_data=(X_val, Y_val), epochs=15)
 
     # Plot history
     plt.figure(figsize=(16, 5))
-    plot_history(history, ['loss', 'val_loss'], ['mse', 'val_mse', 'mae', 'val_mae'], ['ssim', 'val_ssim'], ['snr', 'val_snr'])
+    plot_history(history, ['loss', 'val_loss'], ['mse', 'val_mse', 'mae', 'val_mae'], ['ssim', 'val_ssim'],
+                 ['psnr', 'val_psnr'])
     save_figure(moment, 'history')
 
 
-# -----------------------------------
-# -------- Load the model -----------
-# -----------------------------------
+# ---------------------------------
+# -------- Fine Tuning  -----------
+# ---------------------------------
 
-model = CARE(config=None, name='my_model', basedir=base_dir, name_weights='best')
+if fine_tuning:
+    # Load weights automatically inside CARE class
+    model_trf = CARE(config=None, name='my_model', basedir='archives/trainings/careWeights', name_weights='weights_best.h5', logdir_save=base_dir)
+    layers_care = model_trf.keras_model.layers
+
+    for layer in layers_care[:len(layers_care)-6]:
+        layer.trainable = False
+
+    model_trf.keras_model.summary()
+    history = model_trf.train(X, Y, validation_data=(X_val, Y_val), epochs=15, steps_per_epoch=88)
+    model = model_trf
+
+# --------------------------------
+# -------- Load the model --------
+# --------------------------------
+
+#else:
+ #   model = CARE(config=None, name='my_model', basedir='archives/trainings/careWeights', name_weights='weights_best.h5')
 
 
 # ---------------------------------------------
 # -------- Testings and predictions -----------
 # ---------------------------------------------
 
-if testing:
+if predicting:
     psnrs, ssims, _, _ = restore_and_eval_test(model, 'YX', data_dir, moment)
-    plt.figure()
-    plt.hist(psnrs)
-    save_figure(moment, "histo_psnr", 'PSNR', 'Qty')
-    plt.figure()
-    plt.hist(ssims)
-    save_figure(moment, "histo_ssim", 'SSIM', 'Qty')
 
 
 # -----------------------------------------------
@@ -249,7 +223,7 @@ if save_fig:
 
     # Predict a specific image
     restored = model.predict(x, axes)
-    plt.figure(figsize=(15, 10))
+    plt.figure(figsize=(12, 6))
     plot_some(np.stack([x, restored, y]), title_list=[['low', 'CARE', 'GT']], pmin=2, pmax=99.8)
     psnrs_plot, ssims_plot, psnrs_low_plot, ssims_low_plot = restore_and_eval((y, x, restored), original=True)
     plt.suptitle(f"Low: PSNR: {round(psnrs_low_plot[0], 2)} - SSIM: {round(ssims_low_plot[0], 2)}\n"
@@ -271,8 +245,6 @@ if save_fig:
     Y_val_set = np.array([Y_val[i] for i in idx])
     _P = model.keras_model.predict(X_val_set)
     psnrs, ssims = restore_and_eval((Y_val_set, X_val_set, _P))
-    if config.probabilistic:
-        _P = _P[..., :(_P.shape[-1]//2)]
     plot_some(X_val_set, Y_val_set, _P, pmax=99.5)
     plt.suptitle('5 example validation patches\n'      
                 'top row: input (source),  '          
@@ -288,26 +260,4 @@ if save_fig:
     # SAVE model
     model.export_TF()
 
-# ---------------------------------
-# -------- Load a model -----------
-# ---------------------------------
-if load:
-    # Load images
-    y = imread('data_care/test/GT/img_0001.tif')
-    x = imread('data_care/test/low/img_0001.tif')
-    axes = 'YX'
 
-    # Load model
-    model = CARE(config=None, name='my_model', basedir=base_dir, name_weights = 'weights_ninatubau.h5')
-    restored = model.predict(x, axes)
-
-    # Compare original prediction and ground truth
-    plt.figure(figsize=(15, 10))
-    plot_some(np.stack([x, restored, y]), title_list=[['low', 'CARE', 'GT']], pmin=2, pmax=99.8);
-    save_figure(moment, '1pred')
-
-    plt.figure(figsize=(10, 5))
-    for _x, _name in zip((x, restored, y), ('low', 'CARE', 'GT')):
-        plt.plot(normalize(_x, 1, 99.7)[180], label = _name, lw = 2)
-    plt.legend()
-    save_figure(moment, 'loss')

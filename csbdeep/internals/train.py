@@ -2,7 +2,7 @@ from __future__ import print_function, unicode_literals, absolute_import, divisi
 from six.moves import range, zip, map, reduce, filter
 
 from ..utils import _raise, move_channel_for_backend, axes_dict, axes_check_and_normalize, backend_channels_last
-from ..internals.losses import loss_laplace, loss_mse, loss_mae, loss_thresh_weighted_decay, loss_snr, loss_ssim
+from ..internals.losses import loss_laplace, loss_mse, loss_mae, loss_thresh_weighted_decay, loss_psnr, loss_ssim
 
 import numpy as np
 
@@ -32,7 +32,7 @@ class ParameterDecayCallback(Callback):
             print("\n[ParameterDecayCallback] new %s: %s\n" % (self.name if self.name else 'parameter', new_val))
 
 
-def prepare_model(model, optimizer, loss, metrics=('mse','mae','ssim','snr'),
+def prepare_model(model, optimizer, loss, metrics=('mse','mae','ssim','psnr'),
                   loss_bg_thresh=0, loss_bg_decay=0.06, Y=None):
     """ TODO """
 

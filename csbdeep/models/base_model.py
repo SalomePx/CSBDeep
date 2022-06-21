@@ -84,7 +84,7 @@ class BaseModel(object):
             get_registered_models(cls, verbose=True)
 
 
-    def __init__(self, config, name=None, basedir='.', name_weights=None):
+    def __init__(self, config, name=None, basedir='.', name_weights=None, logdir_save=None):
         """See class docstring."""
 
         config is None or isinstance(config,self._config_class) or _raise (
@@ -103,7 +103,7 @@ class BaseModel(object):
         if config is not None:
             # config was provided -> update before it is saved to disk
             self._update_and_check_config()
-        self._set_logdir()
+        self._set_logdir(logdir_save)
         if config is None:
             # config was loaded from disk -> update it after loading
             self._update_and_check_config()
@@ -130,10 +130,16 @@ class BaseModel(object):
 
 
     @suppress_without_basedir(warn=False)
-    def _set_logdir(self):
+    def _set_logdir(self, logdir_save=None):
         self.logdir = self.basedir / self.name
 
+        if logdir_save:
+            self.logdir_save = Path(logdir_save + '/my_model')
+        else:
+            self.logdir_save = self.basedir / self.name
+
         config_file =  self.logdir / 'config.json'
+        config_file_save = self.logdir_save / 'config.json'
         if self.config is None:
             if config_file.exists():
                 config_dict = load_json(str(config_file))
@@ -146,8 +152,8 @@ class BaseModel(object):
         else:
             if self.logdir.exists():
                 warnings.warn('output path for model already exists, files may be overwritten: %s' % str(self.logdir.resolve()))
-            self.logdir.mkdir(parents=True, exist_ok=True)
-            save_json(vars(self.config), str(config_file))
+            self.logdir_save.mkdir(parents=True, exist_ok=False)
+            save_json(vars(self.config), str(config_file_save))
 
 
     @suppress_without_basedir(warn=False)
@@ -155,7 +161,7 @@ class BaseModel(object):
         from itertools import chain
         # get all weight files and sort by modification time descending (newest first)
         weights_ext   = ('*.h5','*.hdf5')
-        weights_files = chain(*(self.logdir.glob(ext) for ext in weights_ext))
+        weights_files = chain(*(self.logdir_save.glob(ext) for ext in weights_ext))
         weights_files = reversed(sorted(weights_files, key=lambda f: f.stat().st_mtime))
         weights_files = list(weights_files)
         if len(weights_files) == 0:
@@ -185,8 +191,8 @@ class BaseModel(object):
         name : str
             Name of HDF5 weight file (as saved during or after training).
         """
-        print(str(self.logdir/name))
-        self.keras_model.load_weights(str(self.logdir/name))
+        print(str(self.logdir_save/name))
+        self.keras_model.load_weights(str(self.logdir_save/name))
 
 
     def _checkpoint_callbacks(self):
@@ -204,13 +210,13 @@ class BaseModel(object):
     def _training_finished(self):
         if self.basedir is not None:
             if self.config.train_checkpoint_last is not None:
-                self.keras_model.save_weights(str(self.logdir / self.config.train_checkpoint_last))
+                self.keras_model.save_weights(str(self.logdir_save / self.config.train_checkpoint_last))
             if self.config.train_checkpoint is not None:
                 self._find_and_load_weights(self.config.train_checkpoint)
             if self.config.train_checkpoint_epoch is not None:
                 try:
                     # remove temporary weights
-                    (self.logdir / self.config.train_checkpoint_epoch).unlink()
+                    (self.logdir_save / self.config.train_checkpoint_epoch).unlink()
                 except FileNotFoundError:
                     pass
 

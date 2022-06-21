@@ -2,14 +2,13 @@ from __future__ import print_function, unicode_literals, absolute_import, divisi
 from six.moves import range, zip, map, reduce, filter
 
 from ..utils import _raise, consume, move_channel_for_backend, backend_channels_last, axes_check_and_normalize, axes_dict, create_dir, normalize_0_255, plot_some, save_figure
-from csbdeep.internals.losses import SNR, PSNR
+from csbdeep.internals.losses import SNR, PSNR, ssim_maps, SSIM_focus, PSNR_focus
 
 from skimage.metrics import structural_similarity as ssim
 import matplotlib.pyplot as plt
 from tifffile import imread
 from tqdm import tqdm
 import numpy as np
-from math import *
 import warnings
 import cv2
 import os
@@ -470,6 +469,8 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, verbose=True):
     dir_pred = 'fig/' + moment + '/predict/'
     create_dir(dir_pred)
     images_test = os.listdir(data_dir + '/test/low')
+    create_dir('fig/' + moment + '/compare_maps')
+    create_dir('fig/' + moment + '/ssim_maps')
 
     psnrs = []
     ssims = []
@@ -486,10 +487,31 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, verbose=True):
         y = imread(data_dir + '/test/GT/' + img)
         restored = keras_model.predict(x, axes)
 
+        # Plot GT, prediction and SSIM maps
+        plt.figure(figsize=(15, 10))
+        plt.subplot(1, 3, 1)
+        plt.title('Ground truth')
+        plt.imshow(y)
+        plt.subplot(1, 3, 2)
+        plt.title('Prediction')
+        plt.imshow(restored)
+        plt.subplot(1, 3, 3)
+        plt.title('SSIM maps')
+        map = ssim_maps(restored, y)
+        plt.imshow(map, interpolation='nearest', cmap='viridis')
+        plt.colorbar()
+        plt.savefig("fig/" + moment + "/compare_maps/" + name_img + ".png", bbox_inches='tight')
+
+        # Save ssim maps
+        plt.figure(figsize=(15, 6))
+        plt.imshow(map, interpolation='nearest', cmap='viridis')
+        plt.colorbar()
+        plt.savefig("fig/" + moment + "/ssim_maps/" + name_img + ".png", bbox_inches='tight')
+
         if i < 5:
-            plt.figure(figsize=(15, 10))
+            plt.figure(figsize=(12, 4.5))
             plot_some(np.stack([x, restored, y]), title_list=[['low', 'CARE', 'GT']], pmin=2, pmax=99.8)
-            psnrs_plot, ssims_plot, psnrs_low_plot, ssims_low_plot = restore_and_eval((y, x, restored), original=True)
+            psnrs_plot, ssims_plot, psnrs_low_plot, ssims_low_plot = restore_and_eval((y, x, restored), original=True, img_name=name_img)
             plt.suptitle(f"Low: PSNR: {round(psnrs_low_plot[0], 2)} - SSIM: {round(ssims_low_plot[0], 2)}\n"
                          f"Prediction: PSNR: {round(psnrs_plot[0], 2)} - SSIM: {round(ssims_plot[0], 2)}")
             save_figure(moment, '1pred_' + str(name_img))
@@ -504,7 +526,7 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, verbose=True):
 
 
         if verbose:
-            print(f"Prediction {name_img, 2} - PSNR: {round(psnr_img, 2)} - SSIM: {round(ssim_img, 2)} - MAE: {mae_img}  - MSE: {mse_img}")
+            print(f"Prediction {name_img} - PSNR: {round(psnr_img, 2)} - SSIM: {round(ssim_img, 2)} - MAE: {mae_img}  - MSE: {mse_img}")
         psnrs.append(psnr_img)
         ssims.append(ssim_img)
         maes.append(mae_img)
@@ -517,7 +539,7 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, verbose=True):
     return psnrs, ssims, maes, mses
 
 
-def restore_and_eval(datas, original=False):
+def restore_and_eval(datas, original=False, img_name='', focus=True):
 
     Y_val, X_val, restored_val = datas
     psnrs = []
@@ -534,14 +556,22 @@ def restore_and_eval(datas, original=False):
             y, x, restored = Y_val[i].squeeze(), X_val[i].squeeze(), restored_val[i].squeeze()
             y_norm, x_norm, restored_norm = normalize_0_255([y, x, restored])
 
-        psnr_img = PSNR(restored_norm, y_norm)
-        ssim_img = ssim(restored_norm, y_norm, data_range=255)
+        if focus:
+            psnr_img = PSNR_focus(restored_norm, y_norm, name_image=img_name)
+            ssim_img = SSIM_focus(restored_norm, y_norm, name_image=img_name)
+        else:
+            psnr_img = PSNR(restored_norm, y_norm)
+            ssim_img = ssim(restored_norm, y_norm, data_range=255)
         psnrs.append(psnr_img)
         ssims.append(ssim_img)
 
         if original:
-            psnr_low = PSNR(x_norm, y_norm)
-            ssim_low = ssim(x_norm, y_norm, data_range=255)
+            if focus:
+                psnr_low = PSNR_focus(x_norm, y_norm, name_image=img_name)
+                ssim_low = SSIM_focus(x_norm, y_norm, name_image=img_name)
+            else:
+                psnr_low = PSNR(x_norm, y_norm)
+                ssim_low = ssim(x_norm, y_norm, data_range=255)
             psnrs_low.append(psnr_low)
             ssims_low.append(ssim_low)
 

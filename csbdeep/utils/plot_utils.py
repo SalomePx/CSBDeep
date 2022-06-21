@@ -2,9 +2,12 @@ from __future__ import print_function, unicode_literals, absolute_import, divisi
 from six.moves import range, zip, map, reduce, filter
 from six import string_types
 
+import matplotlib.pyplot as plt
+from tifffile import imread
 import numpy as np
 
-from .utils import normalize
+from .utils import normalize, normalize_0_255, save_figure
+
 
 
 
@@ -157,3 +160,6 @@ def to_color(arr, pmin=1, pmax=99.8, gamma=1., colors=((0, 1, 0), (1, 0, 1), (0,
             out[..., j] += c * arr_norm[i_stack]
 
     return np.clip(out, 0, 1)
+
+
+
