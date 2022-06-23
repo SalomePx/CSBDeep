@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from scipy import signal, ndimage
 from tifffile import imread
 import tensorflow as tf
+from tensorflow_probability.python.internal.tensor_util import convert_nonref_to_tensor
 import numpy as np
 import random
 import math
@@ -105,44 +106,49 @@ def loss_mse_focus(mean=True):
     return mse_focus
 
 
-def loss_psnr():
-    def psnr(y_true, y_pred):
+def loss_psnre():
+    def psnre(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
         return tf.reduce_mean(tf.image.psnr(y_true_norm, y_pred_norm, 255))
 
-    return psnr
+    return psnre
 
 
-def loss_psnr_focus():
-    def psnr_focus(y_true, y_pred):
+def loss_psnr():
+    def psnr(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
         mask_true, mask_pred = filtered_loss(y_true_norm, y_pred_norm)
         return - tf.reduce_mean(tf.image.psnr(mask_true, mask_pred, 255))
 
-    return psnr_focus
+    return psnr
+
+
+def loss_ssime():
+    def ssime(y_true, y_pred):
+        y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
+        y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
+        return - tf.reduce_mean(tf.image.ssim(y_true_norm, y_pred_norm, 255))
+
+    return ssime
 
 
 def loss_ssim():
     def ssim(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
-        return - tf.reduce_mean(tf.image.ssim(y_true_norm, y_pred_norm, 255))
+        mask_true, mask_pred = filtered_loss2(y_true_norm, y_pred_norm)
+        mask_true1, mask_pred1 = filtered_loss(y_true_norm, y_pred_norm)
+        print("------MASK TRUE 2-----")
+        print(mask_true)
+        print("------MASK TRUE -----")
+        print(mask_true1)
+        return - tf.reduce_mean(tf.image.ssim(mask_true, mask_pred, 255))
 
     return ssim
 
-
-def loss_ssim_focus():
-    def ssim_focus(y_true, y_pred):
-        y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
-        y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
-        mask_true, mask_pred = filtered_loss(y_true_norm, y_pred_norm)
-        return - tf.reduce_mean(tf.image.ssim(mask_true, mask_pred, 255))
-
-    return ssim_focus
-
-
+'''
 def loss_mae_ssim():
     def mae_ssim(y_true, y_pred):
         val_ssim = - loss_ssim_focus(y_true, y_pred)
@@ -172,11 +178,10 @@ def loss_psnr_ssim():
         return -(0.3 * val_psnr + 0.7 * val_ssim)
 
     return psnr_ssim
+'''
 
+def filtered_loss2(y_true, y_pred):
 
-def filtered_loss(y_true, y_pred):
-
-    print(y_true)
     batch_size = K.shape(y_true)[0]
 
     # Use numpy arrays
@@ -237,27 +242,13 @@ def filtered_loss(y_true, y_pred):
     final_true[position_batch_new, position_1d_new] = rdm_pixel_true
     final_pred[position_batch_new, position_1d_new] = rdm_pixel_pred
 
-    final_true = np.asarray(final_true).astype('float32')
-    final_pred = np.asarray(final_pred).astype('float32')
-
     final_true = np.reshape(final_true, [batch_size, q, 11, 1])
     final_pred = np.reshape(final_pred, [batch_size, q, 11, 1])
 
-    final_true = np.asarray(final_true).astype('float32')
-    final_pred = np.asarray(final_pred).astype('float32')
+    final_true = np.asarray(final_true, dtype='float32')
+    final_pred = np.asarray(final_pred, dtype='float32')
 
-    final_true = tf.constant(final_true)
-    final_pred = tf.constant(final_pred)
-
-    '''
-    final_true = tf.convert_to_tensor(final_true)
-    final_pred = tf.convert_to_tensor(final_pred)
-
-    final_true = tf.cast(final_true, tf.float32)
-    final_pred = tf.cast(final_pred, tf.float32)'''
-    print(final_true)
-    return final_true, final_pred
-    #return y_true, y_pred
+    return convert_nonref_to_tensor(final_true), convert_nonref_to_tensor(final_pred)
 
 
 def filtered_loss4(y_true, y_pred, threshold=0.2, perc=99.9):
@@ -352,7 +343,7 @@ def filtered_loss4(y_true, y_pred, threshold=0.2, perc=99.9):
     return final_true, final_pred
 
 
-def filtered_loss1(y_true, y_pred):
+def filtered_loss(y_true, y_pred):
 
     batch_size = K.shape(y_true)[0]
     batch_size = batch_size.numpy()
@@ -377,7 +368,6 @@ def filtered_loss1(y_true, y_pred):
 
     # Calculate common area of interest
     common_mask = K.any(K.stack([mask_true, mask_pred], axis=0), axis=0)
-    print(common_mask)
 
     # Calculate new images and reshape in 1D
     new_y_true = tf.where(common_mask, y_true, 0.0)
@@ -399,7 +389,6 @@ def filtered_loss1(y_true, y_pred):
     focus_true = tf.reshape(focus_true[:int(batch_size*q2*11)], [batch_size, q2, 11, 1])
     focus_pred = tf.reshape(focus_pred[:int(batch_size*q2*11)], [batch_size, q2, 11, 1])
 
-    print(focus_true)
     return focus_true, focus_pred
 
 
