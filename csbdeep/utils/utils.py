@@ -304,6 +304,7 @@ def save_figure(moment, datatype, xaxis=None, yaxis=None):
         os.makedirs('fig/')
     if not os.path.isdir('fig/' + moment + '/'):
         os.makedirs('fig/' + moment + '/')
+
     file_name = 'fig/' + moment + '/' + datatype + '.jpg'
     plt.xlabel(xaxis)
     plt.ylabel(yaxis)
@@ -348,3 +349,28 @@ def normalize_0_255(datas):
         norm = datas[i] * 255 / datas[i].max()
         normalized.append(norm)
     return normalized
+
+
+def vrange(starts, lengths):
+    """Create concatenated ranges of integers for multiple start/stop
+
+    Parameters:
+        starts (1-D array_like): starts for each range
+        stops (1-D array_like): stops for each range (same shape as starts)
+
+    Returns:
+        numpy.ndarray: concatenated ranges
+
+    For example:
+
+        >>> starts = [1, 3, 4, 6]
+        >>> stops  = [1, 5, 7, 6]
+        >>> vrange(starts, stops)
+        array([3, 4, 4, 5, 6])
+
+    """
+    lengths = np.array(lengths)
+    starts = np.array(starts)
+    stops = np.asarray(lengths+starts)
+    return np.repeat(stops - lengths.cumsum(), lengths) + np.arange(lengths.sum())
+

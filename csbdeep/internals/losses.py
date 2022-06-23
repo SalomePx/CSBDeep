@@ -1,7 +1,7 @@
 from __future__ import print_function, unicode_literals, absolute_import, division
 from six.moves import range, zip, map, reduce, filter
 
-from ..utils import _raise, backend_channels_last, normalize_0_255, save_figure
+from ..utils import _raise, backend_channels_last, normalize_0_255, save_figure, vrange
 from ..utils.tf import keras_import
 from csbdeep.data import no_background_patches_zscore
 
@@ -21,11 +21,10 @@ import sys
 K = keras_import('backend')
 
 
-
 def _mean_or_not(mean):
     # return (lambda x: K.mean(x,axis=(-1 if backend_channels_last() else 1))) if mean else (lambda x: x)
     # Keras also only averages over axis=-1, see https://github.com/keras-team/keras/blob/master/keras/losses.py
-    return (lambda x: K.mean(x,axis=-1)) if mean else (lambda x: x)
+    return (lambda x: K.mean(x, axis=-1)) if mean else (lambda x: x)
 
 
 def loss_laplace(mean=True):
@@ -33,17 +32,19 @@ def loss_laplace(mean=True):
     C = np.log(2.0)
     if backend_channels_last():
         def nll(y_true, y_pred):
-            n     = K.shape(y_true)[-1]
-            mu    = y_pred[...,:n]
-            sigma = y_pred[...,n:]
-            return R(K.abs((mu-y_true)/sigma) + K.log(sigma) + C)
+            n = K.shape(y_true)[-1]
+            mu = y_pred[..., :n]
+            sigma = y_pred[..., n:]
+            return R(K.abs((mu - y_true) / sigma) + K.log(sigma) + C)
+
         return nll
     else:
         def nll(y_true, y_pred):
-            n     = K.shape(y_true)[1]
-            mu    = y_pred[:, :n, ...]
+            n = K.shape(y_true)[1]
+            mu = y_pred[:, :n, ...]
             sigma = y_pred[:, n:, ...]
-            return R(K.abs((mu-y_true)/sigma) + K.log(sigma) + C)
+            return R(K.abs((mu - y_true) / sigma) + K.log(sigma) + C)
+
         return nll
 
 
@@ -52,13 +53,27 @@ def loss_mae(mean=True):
     if backend_channels_last():
         def mae(y_true, y_pred):
             n = K.shape(y_true)[-1]
-            return R(K.abs(y_pred[...,:n] - y_true))
+            return R(K.abs(y_pred[..., :n] - y_true))
+
         return mae
     else:
         def mae(y_true, y_pred):
             n = K.shape(y_true)[1]
-            return R(K.abs(y_pred[:,:n,...] - y_true))
+            return R(K.abs(y_pred[:, :n, ...] - y_true))
+
         return mae
+
+
+def loss_mae_focus(mean=True):
+    R = _mean_or_not(mean)
+
+    def mae_focus(y_true, y_pred):
+        y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
+        y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
+        y_true_filter, y_pred_filter = filtered_loss(y_true_norm, y_pred_norm)
+        return R(K.abs(y_pred_filter - y_true_filter))
+
+    return mae_focus
 
 
 def loss_mse(mean=True):
@@ -66,58 +81,186 @@ def loss_mse(mean=True):
     if backend_channels_last():
         def mse(y_true, y_pred):
             n = K.shape(y_true)[-1]
-            return R(K.square(y_pred[...,:n] - y_true))
+            return R(K.square(y_pred[..., :n] - y_true))
+
         return mse
     else:
         def mse(y_true, y_pred):
             n = K.shape(y_true)[1]
-            return R(K.square(y_pred[:,:n,...] - y_true))
+            return R(K.square(y_pred[:, :n, ...] - y_true))
+
         return mse
 
 
-def loss_psnre():
-    def psnre(y_true, y_pred):
+def loss_mse_focus(mean=True):
+    R = _mean_or_not(mean)
+
+    def mse_focus(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
-        return tf.reduce_mean(tf.image.psnr(y_true_norm, y_pred_norm, 255))
-    return psnre
+        y_true_filter, y_pred_filter = filtered_loss(y_true_norm, y_pred_norm)
+
+        return R(K.square(y_pred_filter - y_true_filter))
+
+    return mse_focus
 
 
 def loss_psnr():
     def psnr(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
-        mask_true, mask_pred = filtered_loss(y_true_norm, y_pred_norm)
-        return - tf.reduce_mean(tf.image.psnr(mask_true, mask_pred, 255))
+        return tf.reduce_mean(tf.image.psnr(y_true_norm, y_pred_norm, 255))
+
     return psnr
 
 
-def loss_ssime():
-    def ssime(y_true, y_pred):
+def loss_psnr_focus():
+    def psnr_focus(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
-        return - tf.reduce_mean(tf.image.ssim(y_true_norm, y_pred_norm, 255))
-    return ssime
+        mask_true, mask_pred = filtered_loss(y_true_norm, y_pred_norm)
+        return - tf.reduce_mean(tf.image.psnr(mask_true, mask_pred, 255))
+
+    return psnr_focus
 
 
 def loss_ssim():
     def ssim(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
-        mask_true, mask_pred = filtered_loss(y_true_norm, y_pred_norm)
-        return - tf.reduce_mean(tf.image.ssim(mask_true, mask_pred, 255))
+        return - tf.reduce_mean(tf.image.ssim(y_true_norm, y_pred_norm, 255))
+
     return ssim
 
 
-def loss_ssimpsnr():
-    def ssimpsnr(y_true, y_pred):
-        val_ssim = loss_ssim(y_true, y_pred)
-        val_psnr = loss_psnr(y_true, y_pred)
-        return - val_ssim * val_psnr
-    return ssimpsnr
+def loss_ssim_focus():
+    def ssim_focus(y_true, y_pred):
+        y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
+        y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
+        mask_true, mask_pred = filtered_loss(y_true_norm, y_pred_norm)
+        return - tf.reduce_mean(tf.image.ssim(mask_true, mask_pred, 255))
+
+    return ssim_focus
 
 
-def filtered_loss(y_true, y_pred, threshold=0.2, perc=99.9, reshape=False):
+def loss_mae_ssim():
+    def mae_ssim(y_true, y_pred):
+        val_ssim = - loss_ssim_focus(y_true, y_pred)
+        val_mae = - loss_mae_focus(y_true, y_pred)
+        return -(0.3 * val_ssim + 0.7 * val_mae)
+
+    return mae_ssim
+
+
+def loss_mae_psnr():
+    def mae_psnr(y_true, y_pred):
+        y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
+        y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
+        val_psnr = - loss_psnr_focus(y_true_norm, y_pred_norm)
+        val_mae = - loss_mae_focus(y_true_norm, y_pred_norm)
+        return -(0.3 * val_psnr + 0.7 * val_mae)
+
+    return mae_psnr
+
+
+def loss_psnr_ssim():
+    def psnr_ssim(y_true, y_pred):
+        y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
+        y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
+        val_psnr = - loss_psnr_focus(y_true_norm, y_pred_norm)
+        val_ssim = - loss_ssim_focus(y_true_norm, y_pred_norm)
+        return -(0.3 * val_psnr + 0.7 * val_ssim)
+
+    return psnr_ssim
+
+
+def filtered_loss(y_true, y_pred):
+
+    print(y_true)
+    batch_size = K.shape(y_true)[0]
+
+    # Use numpy arrays
+    array_true = y_true.numpy().squeeze()
+    array_pred = y_pred.numpy().squeeze()
+
+    # Calculate z-score and area of interest
+    median_true = np.median(array_true, axis=(1, 2))
+    std_true = np.std(array_true, axis=(1, 2))
+    sub_true = np.array([[median_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
+    div_true = np.array([[std_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
+    zscore_true = (array_true - sub_true) / div_true
+    zscore_true = np.where(zscore_true < 0, 0.0, zscore_true)
+    mask_true = zscore_true > 1
+
+    median_pred = np.median(array_pred, axis=(1, 2))
+    std_pred = np.std(array_pred, axis=(1, 2))
+    sub_pred = np.array([[median_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
+    div_pred = np.array([[std_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
+    zscore_pred = (array_pred - sub_pred) / div_pred
+    zscore_pred = np.where(zscore_pred < 0, 0.0, zscore_pred)
+    mask_pred = zscore_pred > 1
+
+    common_mask = np.logical_or(mask_true, mask_pred)
+
+    filtered_true = array_true[common_mask]
+    filtered_pred = array_pred[common_mask]
+    nb_nonzero = np.count_nonzero(common_mask, axis=(1, 2)).tolist()
+    max_nonzero = max(nb_nonzero)
+
+    q = max_nonzero // 11 + 1
+    pixel_per_batch = q * 11
+
+    final_true = np.zeros((batch_size, pixel_per_batch), dtype=object)
+    final_pred = np.zeros((batch_size, pixel_per_batch), dtype=object)
+    to_add_pixels = pixel_per_batch - np.array(nb_nonzero)
+
+    # Fulfill with existing
+    position_batch = np.repeat(np.arange(batch_size), np.array(nb_nonzero))
+    position_1d = vrange(np.zeros((batch_size,), dtype=int), nb_nonzero)
+    #position_1d = np.array([np.arange(k) for k in nb_nonzero])
+    #position_1d = np.hstack(position_1d)
+
+    final_true[position_batch, position_1d] = filtered_true
+    final_pred[position_batch, position_1d] = filtered_pred
+
+    # Fulfill with new
+    rdm_pixel_true = [np.random.choice(array_true[i][common_mask[i]], to_add_pixels[i]) for i in range(batch_size)]
+    rdm_pixel_true = np.hstack(rdm_pixel_true)
+    rdm_pixel_pred = [np.random.choice(array_pred[i][common_mask[i]], to_add_pixels[i]) for i in range(batch_size)]
+    rdm_pixel_pred = np.hstack(rdm_pixel_pred)
+
+    position_batch_new = np.repeat(np.arange(batch_size), np.array(to_add_pixels))
+    position_1d_new = vrange(nb_nonzero, to_add_pixels)
+    #position_1d_new = np.array([np.arange(k, pixel_per_batch) for k in nb_nonzero])
+    #position_1d_new = np.hstack(position_1d_new)
+
+    final_true[position_batch_new, position_1d_new] = rdm_pixel_true
+    final_pred[position_batch_new, position_1d_new] = rdm_pixel_pred
+
+    final_true = np.asarray(final_true).astype('float32')
+    final_pred = np.asarray(final_pred).astype('float32')
+
+    final_true = np.reshape(final_true, [batch_size, q, 11, 1])
+    final_pred = np.reshape(final_pred, [batch_size, q, 11, 1])
+
+    final_true = np.asarray(final_true).astype('float32')
+    final_pred = np.asarray(final_pred).astype('float32')
+
+    final_true = tf.constant(final_true)
+    final_pred = tf.constant(final_pred)
+
+    '''
+    final_true = tf.convert_to_tensor(final_true)
+    final_pred = tf.convert_to_tensor(final_pred)
+
+    final_true = tf.cast(final_true, tf.float32)
+    final_pred = tf.cast(final_pred, tf.float32)'''
+    print(final_true)
+    return final_true, final_pred
+    #return y_true, y_pred
+
+
+def filtered_loss4(y_true, y_pred, threshold=0.2, perc=99.9):
 
     batch_size = K.shape(y_true)[0]
     img_height = K.shape(y_true)[1]
@@ -151,10 +294,10 @@ def filtered_loss(y_true, y_pred, threshold=0.2, perc=99.9, reshape=False):
         # Visualize Z-score of patches
         common_mask = np.logical_or(mask_true, mask_pred)
         idx_common_mask = np.where(common_mask)
-        filtered_true = np.where(common_mask, array_true[i], 0)
-        filtered_pred = np.where(common_mask, array_pred[i], 0)
-        cv2.imwrite("todelete/pred_" + nb + ".tif", filtered_pred)
-        cv2.imwrite("todelete/true_" + nb + ".tif", filtered_true)
+        filtered_true = np.where(common_mask, array_true[i], 0.0)
+        filtered_pred = np.where(common_mask, array_pred[i], 0.0)
+        #cv2.imwrite("todelete/pred_" + nb + ".tif", filtered_pred)
+        #cv2.imwrite("todelete/true_" + nb + ".tif", filtered_true)
 
         # Calculate the vector with the max numer of interesting pixels
         nonzero_nb = np.count_nonzero(common_mask)
@@ -172,9 +315,6 @@ def filtered_loss(y_true, y_pred, threshold=0.2, perc=99.9, reshape=False):
     final_pred = np.zeros((batch_size, q * 11))
     to_add_list = max_per_batch - np.array(nonzero_list)
     to_add_real = q * 11 - np.array(nonzero_list)
-    print("---------")
-    print(q*11)
-    print("---------")
 
     for i in range(batch_size):
 
@@ -184,7 +324,7 @@ def filtered_loss(y_true, y_pred, threshold=0.2, perc=99.9, reshape=False):
         orig_pred = orig_pred[idx_common[i]]
 
 
-        if to_add_list[i] > 0:
+        if to_add_list[i] > 0 and to_add_real[i] > 0:
             qty_rdm = to_add_real[i]
             loc_x = np.random.choice(np.arange(img_height), size=qty_rdm)
             loc_y = np.random.choice(np.arange(img_width), size=qty_rdm)
@@ -199,7 +339,7 @@ def filtered_loss(y_true, y_pred, threshold=0.2, perc=99.9, reshape=False):
             final_pred[i, :len(orig_pred)] = orig_pred
             final_pred[i, len(orig_pred):] = new_pred
 
-        elif to_add_list[i] == 0:
+        elif to_add_list[i] == 0 or to_add_real[i] <= 0:
             final_true[i] = orig_true[:q*11]
             final_pred[i] = orig_pred[:q*11]
 
@@ -212,6 +352,57 @@ def filtered_loss(y_true, y_pred, threshold=0.2, perc=99.9, reshape=False):
     return final_true, final_pred
 
 
+def filtered_loss1(y_true, y_pred):
+
+    batch_size = K.shape(y_true)[0]
+    batch_size = batch_size.numpy()
+    nb_pixels = K.shape(y_true)[1] * K.shape(y_true)[2]
+
+    array_true = y_true.numpy()
+    array_pred = y_true.numpy()
+
+    # Calculate area of interest for true
+    median_true = np.median(array_true)
+    std_true = tf.math.reduce_std(y_true)
+    filtered_true = (y_true - median_true) / std_true
+    filtered_true = tf.where(filtered_true < 0, 0.0, filtered_true)
+    mask_true = filtered_true > 1
+
+    # Calculate area of interest for pred
+    median_pred = np.median(array_pred)
+    std_pred = tf.math.reduce_std(y_pred)
+    filtered_pred = (y_pred - median_pred) / std_pred
+    filtered_pred = tf.where(filtered_pred < 0, 0, filtered_pred)
+    mask_pred = filtered_pred > 1
+
+    # Calculate common area of interest
+    common_mask = K.any(K.stack([mask_true, mask_pred], axis=0), axis=0)
+    print(common_mask)
+
+    # Calculate new images and reshape in 1D
+    new_y_true = tf.where(common_mask, y_true, 0.0)
+    new_y_pred = tf.where(common_mask, y_pred, 0.0)
+    new_y_true = tf.reshape(new_y_true, [batch_size, nb_pixels, 1, 1])
+    new_y_pred = tf.reshape(new_y_pred, [batch_size, nb_pixels, 1, 1])
+
+    # Delete zeros to not have a bias
+    zero_vector = tf.zeros(shape=(batch_size, nb_pixels, 1, 1), dtype=tf.float32)
+    bool_mask_true = tf.not_equal(new_y_true, zero_vector)
+    bool_mask_pred = tf.not_equal(new_y_pred, zero_vector)
+
+    focus_true = tf.boolean_mask(new_y_true, bool_mask_true)
+    focus_pred = tf.boolean_mask(new_y_pred, bool_mask_pred)
+
+    q = len(focus_true) // batch_size
+    q2 = q // 11
+
+    focus_true = tf.reshape(focus_true[:int(batch_size*q2*11)], [batch_size, q2, 11, 1])
+    focus_pred = tf.reshape(focus_pred[:int(batch_size*q2*11)], [batch_size, q2, 11, 1])
+
+    print(focus_true)
+    return focus_true, focus_pred
+
+
 def loss_thresh_weighted_decay(loss_per_pixel, thresh, w1, w2, alpha):
     def _loss(y_true, y_pred):
         val = loss_per_pixel(y_true, y_pred)
@@ -219,6 +410,7 @@ def loss_thresh_weighted_decay(loss_per_pixel, thresh, w1, w2, alpha):
         k2 = alpha * w2 + (1 - alpha)
         return K.mean(K.tf.where(K.tf.less_equal(y_true, thresh), k1 * val, k2 * val),
                       axis=(-1 if backend_channels_last() else 1))
+
     return _loss
 
 
@@ -255,13 +447,13 @@ def PSNR(pred, target):
 
 def PSNR_focus(pred, target, name_image='', save=False):
     img_filter = no_background_patches_zscore()
-    pred_filter = img_filter(pred, image_name=name_image+'_pred', save=save)
-    target_filter = img_filter(target, image_name=name_image+'_target', save=save)
+    pred_filter = img_filter(pred, image_name=name_image + '_pred', save=save)
+    target_filter = img_filter(target, image_name=name_image + '_target', save=save)
 
     # Keep the union of information location
     common_filter = np.logical_or(pred_filter, target_filter)
-    array_pred = pred[common_filter==1]
-    array_target = target[common_filter==1]
+    array_pred = pred[common_filter == 1]
+    array_target = target[common_filter == 1]
 
     psnr = round(PSNR(array_pred, array_target), 3)
     return psnr
@@ -269,24 +461,24 @@ def PSNR_focus(pred, target, name_image='', save=False):
 
 def SSIM_focus(pred, target, name_image='', save=False):
     img_filter = no_background_patches_zscore()
-    pred_filter = img_filter(pred, image_name=name_image+'_pred', save=save)
-    target_filter = img_filter(target, image_name=name_image+'_target', save=save)
+    pred_filter = img_filter(pred, image_name=name_image + '_pred', save=save)
+    target_filter = img_filter(target, image_name=name_image + '_target', save=save)
 
     # Keep the union of information location
     common_filter = np.logical_or(pred_filter, target_filter)
     array_pred = pred[common_filter == 1]
     array_target = target[common_filter == 1]
 
-    ssim = round(structural_similarity(array_pred, array_target, data_range=255),3)
+    ssim = round(structural_similarity(array_pred, array_target, data_range=255), 3)
     return ssim
 
 
 def fspecial_gauss(size, sigma):
     """Function to mimic the 'fspecial' gaussian MATLAB function
     """
-    x, y = np.mgrid[-size//2 + 1:size//2 + 1, -size//2 + 1:size//2 + 1]
-    g = np.exp(-((x**2 + y**2)/(2.0*sigma**2)))
-    return g/g.sum()
+    x, y = np.mgrid[-size // 2 + 1:size // 2 + 1, -size // 2 + 1:size // 2 + 1]
+    g = np.exp(-((x ** 2 + y ** 2) / (2.0 * sigma ** 2)))
+    return g / g.sum()
 
 
 def ssim_maps(y_pred, y_true, focus=False, perc=99.9, threshold=0.2, cs_map=False):
@@ -320,7 +512,7 @@ def ssim_maps(y_pred, y_true, focus=False, perc=99.9, threshold=0.2, cs_map=Fals
 
         # Calculate common area of interest
         common_mask = np.logical_or(mask_true, mask_pred)
-        y_pred = np.where(common_mask==False, y_true, y_pred)
+        y_pred = np.where(common_mask == False, y_true, y_pred)
 
     size = 11
     sigma = 1.5
@@ -376,9 +568,10 @@ def plot_multiple_ssim_maps(name_img, moment):
             plt.imshow(map, interpolation='nearest', cmap='viridis')
 
         else:
-            psnrs[key], ssims[key] = PSNR_focus(datas[i], y, name_image=name_img + '_' + key, save=True), SSIM_focus(datas[i], y,
-                                                                                                          name_img + '_' + key,
-                                                                                                          save=True)
+            psnrs[key], ssims[key] = PSNR_focus(datas[i], y, name_image=name_img + '_' + key, save=True), SSIM_focus(
+                datas[i], y,
+                name_img + '_' + key,
+                save=True)
             print(f"PSNR {key} - target: {psnrs[key]} - SSIM: {ssims[key]}")
             ax = plt.subplot(2, len(datas), i + 1)
             ax.set_title(f'PSNR : {psnrs[key]} \n SSIM: {ssims[key]}')
@@ -391,4 +584,3 @@ def plot_multiple_ssim_maps(name_img, moment):
     plt.colorbar()
     plt.show()
     save_figure('ssim_maps', moment)
-

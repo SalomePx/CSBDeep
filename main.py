@@ -109,8 +109,8 @@ if not initial_care:
             raw_data            = raw_data,
             patch_size          = (128, 128),
             data_path           = data_dir,
-            #transforms         = None,
-            transforms          = [flip_vertical, flip_90, flip_180, flip_270],
+            transforms         = None,
+            # transforms          = [flip_vertical, flip_90, flip_180, flip_270],
             cut_or_sample_patch = 'sample',
             delete_black_patches = True,
             save_file           = data_dir + '/my_training_' + data_dir + '.npz',
@@ -161,7 +161,7 @@ else:
 
 if not load:
     model = CARE(config=None, name='my_model', basedir='models', name_weights='best')
-    config = Config(axes, n_channel_in, n_channel_out, train_loss='mae', unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=88)
+    config = Config(axes, n_channel_in, n_channel_out, train_loss='ssim_focus', unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=88)
     vars(config)
     model = CARE(config, 'my_model', basedir=base_dir)
     model.keras_model.summary()

@@ -218,7 +218,8 @@ class Config(BaseConfig):
         )
         ok['train_loss'] = (
             (    self.probabilistic and self.train_loss == 'laplace'   ) or
-            (not self.probabilistic and self.train_loss in ('mse','mae','ssim','psnr','ssimpsnr'))
+            (not self.probabilistic and self.train_loss in ('mse','mae','ssim','psnr','ssimpsnr', 'mae_focus',
+                                                            'mse_focus', 'psnr_focus', 'ssim_focus'))
         )
         ok['train_epochs']          = _is_int(self.train_epochs,1)
         ok['train_steps_per_epoch'] = _is_int(self.train_steps_per_epoch,1)
