@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt
 from scipy import signal, ndimage
 from tifffile import imread
 import tensorflow as tf
-from tensorflow_probability.python.internal.tensor_util import convert_nonref_to_tensor
 import numpy as np
 import random
 import math
@@ -119,7 +118,7 @@ def loss_psnr():
     def psnr(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
-        mask_true, mask_pred = filtered_loss(y_true_norm, y_pred_norm)
+        mask_true, mask_pred = loss_focus(y_true_norm, y_pred_norm)
         return - tf.reduce_mean(tf.image.psnr(mask_true, mask_pred, 255))
 
     return psnr
@@ -138,17 +137,12 @@ def loss_ssim():
     def ssim(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
-        mask_true, mask_pred = filtered_loss2(y_true_norm, y_pred_norm)
-        mask_true1, mask_pred1 = filtered_loss(y_true_norm, y_pred_norm)
-        print("------MASK TRUE 2-----")
-        print(mask_true)
-        print("------MASK TRUE -----")
-        print(mask_true1)
+        mask_true, mask_pred = loss_focus(y_true_norm, y_pred_norm)
         return - tf.reduce_mean(tf.image.ssim(mask_true, mask_pred, 255))
 
     return ssim
 
-'''
+
 def loss_mae_ssim():
     def mae_ssim(y_true, y_pred):
         val_ssim = - loss_ssim_focus(y_true, y_pred)
@@ -178,9 +172,9 @@ def loss_psnr_ssim():
         return -(0.3 * val_psnr + 0.7 * val_ssim)
 
     return psnr_ssim
-'''
 
-def filtered_loss2(y_true, y_pred):
+
+def filtered_loss0(y_true, y_pred):
 
     batch_size = K.shape(y_true)[0]
 
@@ -248,10 +242,10 @@ def filtered_loss2(y_true, y_pred):
     final_true = np.asarray(final_true, dtype='float32')
     final_pred = np.asarray(final_pred, dtype='float32')
 
-    return convert_nonref_to_tensor(final_true), convert_nonref_to_tensor(final_pred)
+    return final_true, final_pred
 
 
-def filtered_loss4(y_true, y_pred, threshold=0.2, perc=99.9):
+def filtered_loss1(y_true, y_pred, threshold=0.2, perc=99.9):
 
     batch_size = K.shape(y_true)[0]
     img_height = K.shape(y_true)[1]
@@ -343,17 +337,17 @@ def filtered_loss4(y_true, y_pred, threshold=0.2, perc=99.9):
     return final_true, final_pred
 
 
-def filtered_loss(y_true, y_pred):
+def filtered_loss2(y_true, y_pred):
 
     batch_size = K.shape(y_true)[0]
     batch_size = batch_size.numpy()
     nb_pixels = K.shape(y_true)[1] * K.shape(y_true)[2]
 
-    array_true = y_true.numpy()
-    array_pred = y_true.numpy()
+    array_true = y_true.numpy().squeeze()
+    array_pred = y_true.numpy().squeeze()
 
     # Calculate area of interest for true
-    median_true = np.median(array_true)
+    median_true = np.median(array_true, axis=(1, 2))
     std_true = tf.math.reduce_std(y_true)
     filtered_true = (y_true - median_true) / std_true
     filtered_true = tf.where(filtered_true < 0, 0.0, filtered_true)
@@ -390,6 +384,272 @@ def filtered_loss(y_true, y_pred):
     focus_pred = tf.reshape(focus_pred[:int(batch_size*q2*11)], [batch_size, q2, 11, 1])
 
     return focus_true, focus_pred
+
+
+def filtered_loss_3(y_true, y_pred):
+
+    batch_size = K.shape(y_true)[0]
+    batch_size = batch_size.numpy()
+    nb_pixels = K.shape(y_true)[1] * K.shape(y_true)[2]
+
+    # Use numpy arrays
+    array_true = y_true.numpy().squeeze()
+    array_pred = y_pred.numpy().squeeze()
+
+    # Calculate z-score and area of interest
+    median_true = np.median(array_true, axis=(1, 2))
+    std_true = np.std(array_true, axis=(1, 2))
+    sub_true = np.array([[median_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
+    div_true = np.array([[std_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
+    zscore_true = (array_true - sub_true) / div_true
+    zscore_true = np.where(zscore_true < 0, 0.0, zscore_true)
+    mask_true = zscore_true > 1
+
+    median_pred = np.median(array_pred, axis=(1, 2))
+    std_pred = np.std(array_pred, axis=(1, 2))
+    sub_pred = np.array([[median_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
+    div_pred = np.array([[std_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
+    zscore_pred = (array_pred - sub_pred) / div_pred
+    zscore_pred = np.where(zscore_pred < 0, 0.0, zscore_pred)
+    mask_pred = zscore_pred > 1
+
+    common_mask = np.logical_or(mask_true, mask_pred)
+    common_mask = np.expand_dims(common_mask, axis=3)
+    print(common_mask.shape)
+    common_mask = tf.convert_to_tensor(common_mask)
+
+    filtered_true = tf.boolean_mask(y_true, common_mask)
+    filtered_pred = tf.boolean_mask(y_pred, common_mask)
+
+    nb_nonzero = np.count_nonzero(common_mask.numpy().squeeze(), axis=(1, 2)).tolist()
+    max_nonzero = max(nb_nonzero)
+
+    q = max_nonzero // 11 + 1
+    pixel_per_batch = q * 11
+
+    final_true = tf.zeros((batch_size, pixel_per_batch), dtype=object)
+    final_pred = tf.zeros((batch_size, pixel_per_batch), dtype=object)
+    to_add_pixels = pixel_per_batch - np.array(nb_nonzero)
+
+    # Fulfill with existing
+    position_batch = np.repeat(np.arange(batch_size), np.array(nb_nonzero))
+    position_1d = np.array([np.arange(k) for k in nb_nonzero])
+    position_1d = np.hstack(position_1d)
+
+    tmp_true = np.zeros((len(position_1d), len(position_1d)))
+    tmp_true[position_batch, position_1d] = 1
+    tmp_true = tf.convert_to_tensor(tmp_true)
+
+    # Fulfill with new
+    rdm_pixel_true = [np.random.choice(array_true[i][common_mask[i]], to_add_pixels[i]) for i in range(batch_size)]
+    rdm_pixel_true = np.hstack(rdm_pixel_true)
+    rdm_pixel_pred = [np.random.choice(array_pred[i][common_mask[i]], to_add_pixels[i]) for i in range(batch_size)]
+    rdm_pixel_pred = np.hstack(rdm_pixel_pred)
+
+    position_batch_new = np.repeat(np.arange(batch_size), np.array(to_add_pixels))
+    position_1d_new = np.array([np.arange(k, pixel_per_batch) for k in nb_nonzero])
+    position_1d_new = np.hstack(position_1d_new)
+
+    final_true[position_batch_new, position_1d_new] = rdm_pixel_true
+    final_pred[position_batch_new, position_1d_new] = rdm_pixel_pred
+
+    final_true = tf.reshape(final_true, [batch_size, q, 11, 1])
+    final_pred = tf.reshape(final_pred, [batch_size, q, 11, 1])
+
+    return final_true, final_pred
+
+
+
+
+def filtered_loss4(y_true, y_pred):
+
+    batch_size = K.shape(y_true)[0]
+    batch_size = batch_size.numpy()
+    img_height = K.shape(y_true)[1]
+    img_width = K.shape(y_true)[2]
+    nb_pixels = img_height * img_width
+
+    # Use numpy arrays
+    array_true = y_true.numpy().squeeze()
+    array_pred = y_pred.numpy().squeeze()
+
+    # Calculate z-score and area of interest
+    median_true = np.median(array_true, axis=(1, 2))
+    std_true = np.std(array_true, axis=(1, 2))
+    sub_true = np.array([[median_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
+    div_true = np.array([[std_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
+    zscore_true = (array_true - sub_true) / div_true
+    zscore_true = np.where(zscore_true < 0, 0.0, zscore_true)
+    mask_true = zscore_true > 1
+
+    median_pred = np.median(array_pred, axis=(1, 2))
+    std_pred = np.std(array_pred, axis=(1, 2))
+    sub_pred = np.array([[median_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
+    div_pred = np.array([[std_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
+    zscore_pred = (array_pred - sub_pred) / div_pred
+    zscore_pred = np.where(zscore_pred < 0, 0.0, zscore_pred)
+    mask_pred = zscore_pred > 1
+
+    common_mask_arr = np.logical_or(mask_true, mask_pred)
+    common_mask = np.expand_dims(common_mask_arr, axis=3)
+    print(common_mask.shape)
+    common_mask = tf.convert_to_tensor(common_mask)
+
+    filtered_true = tf.boolean_mask(y_true, common_mask)
+    filtered_pred = tf.boolean_mask(y_pred, common_mask)
+
+    nb_nonzero = tf.math.count_nonzero(common_mask, axis=(1,2,3))
+
+    rdm_pixel_true = [np.random.choice(array_true[i][common_mask_arr[i]], nb_pixels) for i in range(batch_size)]
+    rdm_pixel_true = np.hstack(rdm_pixel_true)
+    rdm_pixel_true = tf.convert_to_tensor(rdm_pixel_true)
+    rdm_pixel_true = tf.reshape(rdm_pixel_true, [batch_size, img_height, img_width, 1])
+    rdm_pixel_pred = [np.random.choice(array_pred[i][common_mask_arr[i]], nb_pixels) for i in range(batch_size)]
+    rdm_pixel_pred = np.hstack(rdm_pixel_pred)
+    rdm_pixel_pred = tf.convert_to_tensor(rdm_pixel_pred)
+    rdm_pixel_pred = tf.reshape(rdm_pixel_pred, [batch_size, img_height, img_width, 1])
+
+    final_true = tf.where(common_mask, y_true, rdm_pixel_true)
+    final_pred = tf.where(common_mask, y_pred, rdm_pixel_pred)
+
+    return final_true, final_pred
+
+def filtered_loss_idx(y_true, y_pred):
+
+    batch_size = K.shape(y_true)[0]
+    batch_size = batch_size.numpy()
+    img_height = K.shape(y_true)[1]
+    img_width = K.shape(y_true)[2]
+    nb_pixels = img_height * img_width
+
+    # Use numpy arrays
+    array_true = y_true.numpy().squeeze()
+    array_pred = y_pred.numpy().squeeze()
+
+    # Calculate z-score and area of interest
+    median_true = np.median(array_true, axis=(1, 2))
+    std_true = np.std(array_true, axis=(1, 2))
+    sub_true = np.array([[median_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
+    div_true = np.array([[std_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
+    zscore_true = (array_true - sub_true) / div_true
+    zscore_true = np.where(zscore_true < 0, 0.0, zscore_true)
+    mask_true = zscore_true > 1
+
+    median_pred = np.median(array_pred, axis=(1, 2))
+    std_pred = np.std(array_pred, axis=(1, 2))
+    sub_pred = np.array([[median_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
+    div_pred = np.array([[std_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
+    zscore_pred = (array_pred - sub_pred) / div_pred
+    zscore_pred = np.where(zscore_pred < 0, 0.0, zscore_pred)
+    mask_pred = zscore_pred > 1
+
+    common_mask_arr = np.logical_or(mask_true, mask_pred)
+    common_mask = np.expand_dims(common_mask_arr, axis=3)
+    common_mask = tf.convert_to_tensor(common_mask)
+
+    info = np.array(list(zip(*np.where(common_mask_arr))))
+    idx_info = np.random.choice(np.arange(len(info)), nb_pixels).tolist()
+    idx_mask = info[idx_info]
+    print(idx_mask.shape)
+
+    idx_filter = (idx_mask[:,0], idx_mask[:,1], idx_mask[:,2])
+    filtered_true = array_true[idx_filter]
+    print(img_height, img_width)
+    filtered_true.reshape(img_height, img_width)
+    filtered_true = tf.convert_to_tensor(filtered_true)
+    filtered_true = tf.reshape(filtered_true, [batch_size, img_height, img_width, 1])
+
+    filtered_pred = array_pred[idx_mask].reshape(img_height, img_width)
+    filtered_pred = tf.convert_to_tensor(filtered_pred)
+    filtered_pred = tf.reshape(filtered_pred, [batch_size, img_height, img_width, 1])
+
+    '''
+    rdm_pixel_true = [np.random.choice(array_true[i][common_mask_arr[i]], nb_pixels) for i in range(batch_size)]
+    rdm_pixel_true = np.hstack(rdm_pixel_true)
+    rdm_pixel_true = tf.convert_to_tensor(rdm_pixel_true)
+    rdm_pixel_true = tf.reshape(rdm_pixel_true, [batch_size, img_height, img_width, 1])
+    rdm_pixel_pred = [np.random.choice(array_pred[i][common_mask_arr[i]], nb_pixels) for i in range(batch_size)]
+    rdm_pixel_pred = np.hstack(rdm_pixel_pred)
+    rdm_pixel_pred = tf.convert_to_tensor(rdm_pixel_pred)
+    rdm_pixel_pred = tf.reshape(rdm_pixel_pred, [batch_size, img_height, img_width, 1])
+    '''
+
+    final_true = tf.where(common_mask, y_true, filtered_true)
+    final_pred = tf.where(common_mask, y_pred, filtered_pred)
+
+    return final_true, final_pred
+
+
+def loss_focus(y_true, y_pred):
+
+    batch_size = K.shape(y_true)[0]
+    batch_size = batch_size.numpy()
+    img_height = K.shape(y_true)[1]
+    img_width = K.shape(y_true)[2]
+    nb_pixels = img_height * img_width
+
+    array_true = y_true.numpy().squeeze()
+    array_pred = y_pred.numpy().squeeze()
+
+    # Calculate z-score and area of interest
+    median_true = np.median(array_true, axis=(1, 2))
+    std_true = np.std(array_true, axis=(1, 2))
+    sub_true = np.array([[median_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
+    div_true = np.array([[std_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
+    zscore_true = (array_true - sub_true) / div_true
+    zscore_true = np.where(zscore_true < 0, 0.0, zscore_true)
+    mask_true = zscore_true > 1
+
+    median_pred = np.median(array_pred, axis=(1, 2))
+    std_pred = np.std(array_pred, axis=(1, 2))
+    sub_pred = np.array([[median_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
+    div_pred = np.array([[std_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
+    zscore_pred = (array_pred - sub_pred) / div_pred
+    zscore_pred = np.where(zscore_pred < 0, 0.0, zscore_pred)
+    mask_pred = zscore_pred > 1
+
+    common_mask_arr = np.logical_or(mask_true, mask_pred)
+    common_mask = np.expand_dims(common_mask_arr, axis=3)
+    common_mask_1d = np.reshape(common_mask, [batch_size, nb_pixels, 1, 1])
+    common_mask = tf.convert_to_tensor(common_mask)
+
+    # Reshape batches in 1D
+    new_y_true = tf.where(common_mask, y_true, 0.0)
+    new_y_pred = tf.where(common_mask, y_pred, 0.0)
+    new_y_true = tf.reshape(new_y_true, [batch_size, nb_pixels, 1, 1])
+    new_y_pred = tf.reshape(new_y_pred, [batch_size, nb_pixels, 1, 1])
+
+    # Find localisation of zeros
+    nb_nonzero = tf.math.count_nonzero(new_y_true,  axis=(1, 2, 3)).numpy()
+    nb_zero = nb_pixels - nb_nonzero
+    max_nonzero = int(np.max(nb_nonzero))
+    mask_zeros = np.zeros((batch_size, nb_pixels, 1))
+
+    loc_zeros = tf.where(common_mask_1d == False).numpy()
+    loc_zeros_per_batch = [np.where(common_mask_1d[i]==0) for i in range(batch_size)]
+    for i in range(batch_size):
+        if i == 0:
+            loc_zeros_per_batch.append(loc_zeros[:nb_zero[i]])
+        elif i == batch_size-1:
+            loc_zeros_per_batch.append(loc_zeros[nb_zero[i - 1]:nb_zero[i]])
+        else:
+            loc_zeros_per_batch.append(loc_zeros[:nb_zero[i - 1]])
+
+    # Choose randomly zeros to delete
+    print(loc_zeros_per_batch)
+    idx_loc = [np.random.choice(np.arange(len(loc_zeros_per_batch[i])), replace=False) for i in range(batch_size)]
+    for i, idx in zip(np.arange(batch_size), idx_loc):
+        mask_zeros[i, idx] = 1
+    mask_zeros = np.expand_dims(mask_zeros, axis=3)
+
+    keep_true = tf.gather_nd(indices=common_mask_1d+mask_zeros, params=new_y_true)
+    keep_pred = tf.gather_nd(indices=common_mask_1d+mask_zeros, params=new_y_pred)
+
+    print(keep_pred)
+
+
+    return y_true, y_pred
+
 
 
 def loss_thresh_weighted_decay(loss_per_pixel, thresh, w1, w2, alpha):
