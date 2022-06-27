@@ -590,6 +590,8 @@ def loss_focus(y_true, y_pred):
 
     array_true = y_true.numpy().squeeze()
     array_pred = y_pred.numpy().squeeze()
+    array_true_1d = array_true.reshape(batch_size, nb_pixels)
+    array_pred_1d = array_pred.reshape(batch_size, nb_pixels)
 
     # Calculate z-score and area of interest
     median_true = np.median(array_true, axis=(1, 2))
@@ -597,7 +599,6 @@ def loss_focus(y_true, y_pred):
     sub_true = np.array([[median_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
     div_true = np.array([[std_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
     zscore_true = (array_true - sub_true) / div_true
-    zscore_true = np.where(zscore_true < 0, 0.0, zscore_true)
     mask_true = zscore_true > 1
 
     median_pred = np.median(array_pred, axis=(1, 2))
@@ -605,12 +606,11 @@ def loss_focus(y_true, y_pred):
     sub_pred = np.array([[median_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
     div_pred = np.array([[std_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
     zscore_pred = (array_pred - sub_pred) / div_pred
-    zscore_pred = np.where(zscore_pred < 0, 0.0, zscore_pred)
     mask_pred = zscore_pred > 1
 
     common_mask_arr = np.logical_or(mask_true, mask_pred)
     common_mask = np.expand_dims(common_mask_arr, axis=3)
-    common_mask_1d = np.reshape(common_mask, [batch_size, nb_pixels, 1, 1])
+    common_mask_1d = np.reshape(common_mask, [batch_size, nb_pixels])
     common_mask = tf.convert_to_tensor(common_mask)
 
     # Reshape batches in 1D
@@ -620,33 +620,48 @@ def loss_focus(y_true, y_pred):
     new_y_pred = tf.reshape(new_y_pred, [batch_size, nb_pixels, 1, 1])
 
     # Find localisation of zeros
-    nb_nonzero = tf.math.count_nonzero(new_y_true,  axis=(1, 2, 3)).numpy()
-    nb_zero = nb_pixels - nb_nonzero
-    max_nonzero = int(np.max(nb_nonzero))
-    mask_zeros = np.zeros((batch_size, nb_pixels, 1))
+    loc_nonzeros_per_batch = [np.where(common_mask_1d[i] == 1)[0] for i in range(batch_size)]
+    loc_zeros_per_batch = [np.where(common_mask_1d[i] == 0)[0] for i in range(batch_size)]
+    nb_nonzeros_per_batch = [len(loc_nonzeros_per_batch[i]) for i in range(batch_size)]
+    max_nonzeros = max(nb_nonzeros_per_batch)
+    nb_zero_to_replace = max_nonzeros - np.array(nb_nonzeros_per_batch)
 
-    loc_zeros = tf.where(common_mask_1d == False).numpy()
-    loc_zeros_per_batch = [np.where(common_mask_1d[i]==0) for i in range(batch_size)]
-    for i in range(batch_size):
-        if i == 0:
-            loc_zeros_per_batch.append(loc_zeros[:nb_zero[i]])
-        elif i == batch_size-1:
-            loc_zeros_per_batch.append(loc_zeros[nb_zero[i - 1]:nb_zero[i]])
-        else:
-            loc_zeros_per_batch.append(loc_zeros[:nb_zero[i - 1]])
+    # Choose randomly zeros to save for each batch
+    mask = np.where(common_mask_arr.reshape(batch_size, nb_pixels), 1, 0)
+    idx_loc = [np.random.choice(np.arange(nb_nonzeros_per_batch[i]), size=nb_zero_to_replace[i], replace=False) for i in range(batch_size)]
+    pixels_zero_to_change = [loc_nonzeros_per_batch[i][idx_loc[i]] for i in range(batch_size)]
 
-    # Choose randomly zeros to delete
-    print(loc_zeros_per_batch)
-    idx_loc = [np.random.choice(np.arange(len(loc_zeros_per_batch[i])), replace=False) for i in range(batch_size)]
-    for i, idx in zip(np.arange(batch_size), idx_loc):
-        mask_zeros[i, idx] = 1
-    mask_zeros = np.expand_dims(mask_zeros, axis=3)
+    for i, idx in zip(np.arange(batch_size), pixels_zero_to_change):
+        mask[i, idx] = 2
+    print([len(np.where(mask[i] == (2 or 1))[0]) for i in range(batch_size)])
+    print(mask)
+    mask = np.reshape(mask, [batch_size, nb_pixels, 1, 1])
+    mask = tf.convert_to_tensor(mask)
 
-    keep_true = tf.gather_nd(indices=common_mask_1d+mask_zeros, params=new_y_true)
-    keep_pred = tf.gather_nd(indices=common_mask_1d+mask_zeros, params=new_y_pred)
+    # Replace zeros by random pixels
+    # Choose random indexes among the positive ones
+    pos_idx = [np.where(mask[i] == 1)[0] for i in range(batch_size)]
+    nb_idx = [np.arange(len(pos_idx[i])) for i in range(batch_size)]
+    rdm_idx = [np.random.choice(nb_idx[i], size=nb_pixels) for i in range(batch_size)]
+    rdm_idx_y = np.array([np.array(pos_idx[i][rdm_idx[i]]) for i in range(batch_size)]).reshape(batch_size * nb_pixels,)
+    rdm_idx_x = np.repeat(np.arange(batch_size), nb_pixels)
+    rdm_pixels_true = array_true_1d[(rdm_idx_x, rdm_idx_y)].reshape(batch_size, nb_pixels, 1, 1)
+    rdm_pixels_pred = array_pred_1d[(rdm_idx_x, rdm_idx_y)].reshape(batch_size, nb_pixels, 1, 1)
+
+    new_y_true = tf.where(mask == 2, rdm_pixels_true, new_y_true)
+    new_y_pred = tf.where(mask == 2, rdm_pixels_pred, new_y_pred)
+
+    mask = tf.where(mask == 2, 1, mask)
+    mask = tf.reshape(mask, (batch_size, img_height, img_width, 1))
+    new_y_true = tf.reshape(new_y_true, (batch_size, img_height, img_width, 1))
+    new_y_pred = tf.reshape(new_y_pred, (batch_size, img_height, img_width, 1))
+
+    idx_mask = tf.where(mask==1)
+
+    keep_true = tf.gather_nd(indices=idx_mask, params=new_y_true)
+    keep_pred = tf.gather_nd(indices=idx_mask, params=new_y_pred)
 
     print(keep_pred)
-
 
     return y_true, y_pred
 
