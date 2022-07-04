@@ -8,13 +8,16 @@ import sys, os, warnings
 
 from tqdm import tqdm
 import numpy as np
+import shutil
 import math
 import cv2
+import os
 
 from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice, save_patch, \
     normalize, create_patch_dir, create_dir
 from .patch_selection import patch_is_valid_care, patch_is_valid_occupation
 from .transform import Transform, permute_axes, broadcast_target
+
 from ..io import save_training_data
 from ..utils.six import Path
 
@@ -65,22 +68,13 @@ def no_background_patches(threshold=0.4, percentile=99.9):
     return _filter
 
 
-def no_background_patches_zscore(threshold=0.2, percentile=99.9):
+def no_background_patches_zscore():
     # TODO : the definition : in construction
 
     """Returns a patch filter to be used by :func:`create_patches` to determine for each image pair which patches
     are eligible for sampling. The purpose is to only sample patches from "interesting" regions of the raw image that
     actually contain a substantial amount of non-background signal. To that end, a maximum filter is applied to the target image
     to find the largest values in a region.
-
-    Parameters
-    ----------
-    threshold : float, optional
-        Scalar threshold between 0 and 1 that will be multiplied with the (outlier-robust)
-        maximum of the image (see `percentile` below) to denote a lower bound.
-        Only patches with a maximum value above this lower bound are eligible to be sampled.
-    percentile : float, optional
-        Percentile value to denote the (outlier-robust) maximum of an image, i.e. should be close 100.
 
     Returns
     -------
@@ -96,8 +90,6 @@ def no_background_patches_zscore(threshold=0.2, percentile=99.9):
         Illegal arguments.
     """
 
-    (np.isscalar(percentile) and 0 <= percentile <= 100) or _raise(ValueError())
-    (np.isscalar(threshold) and 0 <= threshold <= 1) or _raise(ValueError())
 
     def _filter(y, image_name='', dtype=np.float32, save=True):
         if dtype is not None:
@@ -526,8 +518,7 @@ def shuffle_inplace(*arrs, **kwargs):
 # ----------------------------------------- MITOCHONDRIA PART ---------------------------------------------
 # ---------------------------------------------------------------------------------------------------------
 
-def cut_patches_in_image(datas, patch_size, n_sample_size, image_name, delete_black_patches=True, occup_min=0.02,
-                         threshold=0.2, percentile=99.9):
+def cut_patches_in_image(datas, patch_size, image_name='', delete_black_patches=True, occup_min=0.02):
     """Cut images in patches with the method of a grid.
 
     Use the previous calculation of how many patches can fulfill the height and width (round to ceil), leading to
@@ -540,8 +531,6 @@ def cut_patches_in_image(datas, patch_size, n_sample_size, image_name, delete_bl
         Where y is GT and x is input
     patch_size : tuple of int (a, b)
         Where a is the size of the x-axis and b is the size of the y-axis
-    n_sample_size : tuple of int (h, w)
-        Where h and w are the number of patch fulfilling the x-axis and y-axis respectively
     image_name : str
         Name of the image in which we cut patches (to save patches)
     delete_black_patches : bool
@@ -549,11 +538,6 @@ def cut_patches_in_image(datas, patch_size, n_sample_size, image_name, delete_bl
     occup_min : float between 0 and 1
         Minimum occupation of relevant information. To adjust according to the dataset.
         For the selection of patches. Used with delete_black_patches=True only.
-    threshold : float between 0 and 1
-        Number of pixels that we want to be superior to the threshold * percentile.
-        For the selection of patches. Used with delete_black_patches=True only.
-    percentile : float between 0 and 100
-        Percentile wanted for the selection of patches. Used with delete_black_patches=True only.
     Returns
     -------
     tuple(y:class:`numpy.ndarray`, x:class:`numpy.ndarray`)
@@ -565,14 +549,15 @@ def cut_patches_in_image(datas, patch_size, n_sample_size, image_name, delete_bl
     patches_y = []
     nb_saved_patch = 1
     nb_patch = 1
-    n_height, n_width = n_sample_size
+    n_height = math.ceil(x.shape[0] / patch_size[0])
+    n_width = math.ceil(x.shape[1] / patch_size[1])
 
     # Checks
     assert (each_patch_size > 0 and (type(each_patch_size) is int) for each_patch_size in patch_size)
     assert x.shape == y.shape and x.shape[0] >= patch_size[0] and x.shape[1] >= patch_size[1]
     assert type(image_name) is str
-    assert n_sample_size[0] > 0 and n_sample_size[1] > 0
-    assert 0 <= occup_min <= 1 and 0 <= threshold <= 1 and 0 <= percentile <= 100
+    assert n_height > 0 and n_width > 0
+    assert 0 <= occup_min <= 1
 
 
     # Normalization of data
@@ -583,7 +568,7 @@ def cut_patches_in_image(datas, patch_size, n_sample_size, image_name, delete_bl
     if delete_black_patches:
         filtered = (y_norm - np.median(y_norm)) / np.std(y_norm)
         filtered = np.where(filtered < 0, 0, filtered)
-        y_filter = np.where(filtered > threshold * np.percentile(filtered, percentile), 1, 0)
+        y_filter = np.where(filtered > 1)
         cv2.imwrite("savings/filtered_images/" + image_name + ".tif", filtered)
 
     # Create patches
@@ -786,11 +771,6 @@ def create_patches_mito(
         tfm = i // initial_nb_images
         image_name = all_files_names[idx].split('.')[0] + '_' + str(tfm)
 
-        # Print metrics on input images
-        #x_norm = x * 255 / x.max()
-        #y_norm = y * 255 / y.max()
-        #print(f"{image_name}: PSNR: {PSNR(x_norm, y_norm)} - SSIM: {ssim(x_norm, y_norm, data_range=255)}")
-
         if i == 0:
             axes = axes_check_and_normalize(_axes, len(patch_size))
             channel = axes_dict(axes)['C']
@@ -816,8 +796,7 @@ def create_patches_mito(
                 _Y, _X = sample_patches_in_image((y, x), patch_size, n_samples, image_name)
             # Create with random selection among interest areas
             else:
-                _Y, _X = cut_patches_in_image((y, x), patch_size, (n_patches_height, n_patches_width), image_name,
-                                              delete_black_patches)
+                _Y, _X = cut_patches_in_image((y, x), patch_size, image_name, delete_black_patches)
             n_patches_per_image = len(_X)
 
             # Add the selected patches if at least on patch is kept within the image
@@ -920,3 +899,26 @@ def sample_patches_in_image(datas, patch_size, n_samples, image_name, patch_filt
         save_patch(save_name, (x_res[i], y_res[i]))
 
     return patches
+
+
+def create_test_patches(raw_data, save_dir, channel=2):
+
+    all_files_names = sorted(os.listdir(save_dir + '/GT'))
+
+    os.mkdir(save_dir + '/GT2')
+    os.mkdir(save_dir + '/low2')
+
+    image_pairs = raw_data.generator()
+
+    for i, (x, y, _, _) in enumerate(image_pairs):
+        patches_test_y, patches_test_x = cut_patches_in_image((y, x), patch_size=(128, 128), delete_black_patches=False)
+        patches_test_x, patches_test_y = norm_percentiles()(patches_test_x, patches_test_y, x, y, None, channel)
+        for j, (patch_y, patch_x) in enumerate(zip(patches_test_y, patches_test_x)):
+            image_name = str(all_files_names[i].split('.')[0]) + '_' + str(j) + '.tif'
+            cv2.imwrite(save_dir + '/GT2/' + image_name, patch_y)
+            cv2.imwrite(save_dir + '/low2/' + image_name, patch_x)
+
+    shutil.rmtree(save_dir + '/GT')
+    shutil.rmtree(save_dir + '/low')
+    os.rename(save_dir + '/GT2', save_dir + '/GT')
+    os.rename(save_dir + '/low2', save_dir + '/low')

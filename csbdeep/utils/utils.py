@@ -311,13 +311,13 @@ def save_figure(moment, datatype, xaxis=None, yaxis=None):
     plt.savefig(file_name, bbox_inches='tight')
 
 
-def save_patch(save_name, datas):
+def save_patch(save_name, datas, basedir='savings/patches/train/'):
     x, y = datas
 
-    path_save_x = 'savings/patches/train/low/' + save_name
+    path_save_x = basedir + 'low/' + save_name
     cv2.imwrite(path_save_x, x)
 
-    path_save_y = 'savings/patches/train/GT/' + save_name
+    path_save_y = basedir + 'GT/' + save_name
     cv2.imwrite(path_save_y, y)
 
 

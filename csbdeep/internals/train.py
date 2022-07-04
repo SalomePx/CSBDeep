@@ -2,7 +2,7 @@ from __future__ import print_function, unicode_literals, absolute_import, divisi
 from six.moves import range, zip, map, reduce, filter
 
 from ..utils import _raise, move_channel_for_backend, axes_dict, axes_check_and_normalize, backend_channels_last
-from ..internals.losses import loss_laplace, loss_mse, loss_mae, loss_thresh_weighted_decay, loss_psnr, loss_ssim, loss_mae_focus, loss_mse_focus #loss_psnr_focus, loss_ssim_focus
+from ..internals.losses import loss_laplace, loss_mse, loss_mae, loss_thresh_weighted_decay, loss_psnr, loss_ssim, loss_mae_focus, loss_mse_focus, loss_psnr_focus, loss_ssim_focus
 
 import tensorflow as tf
 import numpy as np
@@ -33,7 +33,7 @@ class ParameterDecayCallback(Callback):
             print("\n[ParameterDecayCallback] new %s: %s\n" % (self.name if self.name else 'parameter', new_val))
 
 
-def prepare_model(model, optimizer, loss, metrics=('mse','mae','ssim','psnr'),
+def prepare_model(model, optimizer, loss, metrics=('mse','mae','ssim','psnr','mse_focus','mae_focus','ssim_focus','psnr_focus'),
                   loss_bg_thresh=0, loss_bg_decay=0.06, Y=None):
     """ TODO """
 
@@ -41,8 +41,8 @@ def prepare_model(model, optimizer, loss, metrics=('mse','mae','ssim','psnr'),
 
     loss_standard = eval('loss_%s()'%loss)
     _metrics      = [eval('loss_%s()'%m) for m in metrics]
-    #early_stop = tf.keras.callbacks.EarlyStopping(patience=5)
-    callbacks     = []
+    early_stop = tf.keras.callbacks.EarlyStopping(patience=15)
+    callbacks     = [TerminateOnNaN(), early_stop]
 
     # Checks
     assert 0 <= loss_bg_thresh <= 1

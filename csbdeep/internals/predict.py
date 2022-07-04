@@ -3,6 +3,7 @@ from six.moves import range, zip, map, reduce, filter
 
 from ..utils import _raise, consume, move_channel_for_backend, backend_channels_last, axes_check_and_normalize, axes_dict, create_dir, normalize_0_255, plot_some, save_figure
 from csbdeep.internals.losses import SNR, PSNR, ssim_maps, SSIM_focus, PSNR_focus
+from ..data.generate import cut_patches_in_image
 
 from skimage.metrics import structural_similarity as ssim
 import matplotlib.pyplot as plt
@@ -10,6 +11,7 @@ from tifffile import imread
 from tqdm import tqdm
 import numpy as np
 import warnings
+import math
 import cv2
 import os
 
@@ -39,10 +41,79 @@ def predict_direct(keras_model, x, axes_in, axes_out=None, **kwargs):
     channel_in, channel_out = ax_in['C'], ax_out['C']
     single_sample = ax_in['S'] is None
     len(axes_in) == x.ndim or _raise(ValueError())
-    x = to_tensor(x,channel=channel_in,single_sample=single_sample)
-    pred = from_tensor(keras_model.predict(x,**kwargs),channel=channel_out,single_sample=single_sample)
+    x = to_tensor(x, channel=channel_in, single_sample=single_sample)
+    pred = from_tensor(keras_model.predict(x, **kwargs), channel=channel_out, single_sample=single_sample)
     len(axes_out) == pred.ndim or _raise(ValueError())
     return pred
+
+
+def predict_per_patch(keras_model, x, axes_in, axes_out=None, patch_size=(128, 128), **kwargs):
+    if axes_out is None:
+        axes_out = axes_in
+
+    ax_in, ax_out = axes_dict(axes_in), axes_dict(axes_out)
+    channel_in, channel_out = 2, 2
+    single_sample = ax_in['S'] is None
+    len(axes_in) == x.ndim or _raise(ValueError())
+
+    n_height  = math.ceil(x.shape[0] / patch_size[0])
+    n_width   = math.ceil(x.shape[1] / patch_size[1])
+    overlap_x, overlap_y = n_height * patch_size[0] - x.shape[0], n_width * patch_size[1] - x.shape[1]
+
+    patches, _ = cut_patches_in_image((x, x), patch_size=patch_size, delete_black_patches=False)
+    final_pred = np.zeros(x.shape)
+    all_pred = [[] for i in range(n_height)]
+    for i, patch in enumerate(patches):s
+        row = math.floor(i / n_width)
+        col  = i % n_width
+
+        tensor_patch = to_tensor(patch, single_sample=single_sample)
+        pred = from_tensor(keras_model.keras_model.predict(tensor_patch, **kwargs), channel=channel_out, single_sample=single_sample)
+        pred = pred.squeeze()
+        all_pred[row].append(pred)
+
+        if row == n_height-1 and col == n_width-1:
+            begin_pad_width, end_pad_width = x.shape[1] - patch_size[1], (n_width - 1) * patch_size[1]
+            begin_pad_height, end_pad_height = x.shape[0] - patch_size[0], (n_height - 1) * patch_size[0]
+
+            patch_top = all_pred[row-1][col][patch_size[0]-overlap_x:, :overlap_y]
+            patch_left = all_pred[row][col-1][:overlap_x, patch_size[1] - overlap_y:]
+            patch_diag = all_pred[row - 1][col - 1][patch_size[0]-overlap_x:, patch_size[1]-overlap_y:]
+            final_pred[begin_pad_height:end_pad_height, begin_pad_width: end_pad_width] = (patch_top + patch_left + patch_diag + pred[:overlap_x, :overlap_y]) / 4
+
+            patch_top = all_pred[row-1][col][patch_size[0]-overlap_x:, overlap_y:]
+            final_pred[begin_pad_height:end_pad_height, end_pad_width:] = (patch_top + pred[:overlap_x, overlap_y:]) / 2
+
+            patch_left = all_pred[row][col-1][overlap_x:, patch_size[1] - overlap_y:]
+            final_pred[end_pad_height:, begin_pad_width: end_pad_width] = (patch_left + pred[overlap_x:,:overlap_y]) / 2
+
+            final_pred[end_pad_height:, end_pad_width:] = pred[overlap_x:, overlap_y:]
+
+        elif row == n_height-1:
+            begin_pad_width, end_pad_width = col * patch_size[1], (col + 1) * patch_size[1]
+            begin_pad_height, end_pad_height = x.shape[0] - patch_size[0], (n_height - 1) * patch_size[0]
+
+            patch_top = all_pred[row - 1][col][patch_size[0]-overlap_x:, :]
+
+            final_pred[begin_pad_height:end_pad_height, begin_pad_width:end_pad_width] = (patch_top + pred[:overlap_x, :]) / 2
+            final_pred[end_pad_height:, begin_pad_width: end_pad_width] = pred[overlap_x:, ]
+
+        elif col == n_width-1:
+            begin_pad_width, end_pad_width = x.shape[1] - patch_size[1], (n_width - 1) * patch_size[1]
+            begin_pad_height, end_pad_height = row * patch_size[0], (row + 1) * patch_size[0]
+
+            patch_left = all_pred[row][col-1][:, patch_size[1]-overlap_y:]
+            final_pred[begin_pad_height:end_pad_height, begin_pad_width:end_pad_width] = (patch_left + pred[:,:overlap_y]) / 2
+            final_pred[begin_pad_height:end_pad_height, end_pad_width:] = pred[:, overlap_y:]
+
+        else:
+            begin_pad_width, end_pad_width = col * patch_size[1], (col + 1) * patch_size[1]
+            begin_pad_height, end_pad_height = row * patch_size[0], (row + 1) * patch_size[0]
+            final_pred[begin_pad_height:end_pad_height, begin_pad_width:end_pad_width] = pred
+
+    len(axes_out) == pred.ndim or _raise(ValueError())
+    return final_pred
+
 
 
 def predict_tiled(keras_model,x,n_tiles,block_sizes,tile_overlaps,axes_in,axes_out=None,pbar=None,**kwargs):
@@ -464,16 +535,18 @@ class Progress(object):
 #####################################################################################################################
 
 
-def restore_and_eval_test(keras_model, axes, data_dir, moment, verbose=True):
+def restore_and_eval_test(keras_model, axes, data_dir, moment, patch_size=(128,128), verbose=True):
 
     dir_pred = 'fig/' + moment + '/predict/'
     create_dir(dir_pred)
-    images_test = os.listdir(data_dir + '/test/low')
+    images_test = sorted(os.listdir(data_dir + '/test/low'))
     create_dir('fig/' + moment + '/compare_maps')
     create_dir('fig/' + moment + '/ssim_maps')
 
     psnrs = []
     ssims = []
+    psnrs_focus = []
+    ssims_focus = []
     maes = []
     mses = []
 
@@ -485,7 +558,8 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, verbose=True):
         name_img = img.split('.')[0]
         x = imread(data_dir + '/test/low/' + img)
         y = imread(data_dir + '/test/GT/' + img)
-        restored = keras_model.predict(x, axes)
+        #restored = keras_model.predict(x, axes)
+        restored = predict_per_patch(keras_model, x, axes, patch_size=patch_size)
 
         # Plot GT, prediction and SSIM maps
         plt.figure(figsize=(15, 10))
@@ -521,9 +595,10 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, verbose=True):
         y_norm, x_norm, restored_norm = normalize_0_255([y, x, restored])
         psnr_img = PSNR(restored_norm, y_norm)
         ssim_img = ssim(restored_norm, y_norm, data_range=255)
-        mae_img = np.mean(np.abs(y_norm - restored_norm))
-        mse_img = np.square(np.subtract(y_norm, restored_norm)).mean()
-
+        psnr_focus_img = PSNR_focus(restored_norm, y_norm)
+        ssim_focus_img = SSIM_focus(restored_norm, y_norm)
+        mae_img = round(np.mean(np.abs(y_norm - restored_norm)), 2)
+        mse_img = round(np.square(np.subtract(y_norm, restored_norm)).mean(), 2)
 
         if verbose:
             print(f"Prediction {name_img} - PSNR: {round(psnr_img, 2)} - SSIM: {round(ssim_img, 2)} - MAE: {mae_img}  - MSE: {mse_img}")
@@ -531,15 +606,17 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, verbose=True):
         ssims.append(ssim_img)
         maes.append(mae_img)
         mses.append(mse_img)
+        psnrs_focus.append(psnr_focus_img)
+        ssims_focus.append(ssim_focus_img)
 
     if verbose:
         print(f"Mean of testing predictions: PSNR: {round(np.mean(psnrs), 2)} - SSIM: {round(np.mean(ssims), 2)} - MAE: {np.mean(maes)} - MSE: {np.mean(mses)} ")
         print('=' * 66)
 
-    return psnrs, ssims, maes, mses
+    return psnrs, ssims, psnrs_focus, ssims_focus, maes, mses
 
 
-def restore_and_eval(datas, original=False, img_name='', focus=True):
+def restore_and_eval(datas, original=False, img_name=''):
 
     Y_val, X_val, restored_val = datas
     psnrs = []
@@ -556,22 +633,14 @@ def restore_and_eval(datas, original=False, img_name='', focus=True):
             y, x, restored = Y_val[i].squeeze(), X_val[i].squeeze(), restored_val[i].squeeze()
             y_norm, x_norm, restored_norm = normalize_0_255([y, x, restored])
 
-        if focus:
-            psnr_img = PSNR_focus(restored_norm, y_norm, name_image=img_name)
-            ssim_img = SSIM_focus(restored_norm, y_norm, name_image=img_name)
-        else:
-            psnr_img = PSNR(restored_norm, y_norm)
-            ssim_img = ssim(restored_norm, y_norm, data_range=255)
+        psnr_img = PSNR_focus(restored_norm, y_norm, name_image=img_name)
+        ssim_img = SSIM_focus(restored_norm, y_norm, name_image=img_name)
         psnrs.append(psnr_img)
         ssims.append(ssim_img)
 
         if original:
-            if focus:
-                psnr_low = PSNR_focus(x_norm, y_norm, name_image=img_name)
-                ssim_low = SSIM_focus(x_norm, y_norm, name_image=img_name)
-            else:
-                psnr_low = PSNR(x_norm, y_norm)
-                ssim_low = ssim(x_norm, y_norm, data_range=255)
+            psnr_low = PSNR_focus(x_norm, y_norm, name_image=img_name)
+            ssim_low = SSIM_focus(x_norm, y_norm, name_image=img_name)
             psnrs_low.append(psnr_low)
             ssims_low.append(ssim_low)
 

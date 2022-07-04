@@ -131,7 +131,7 @@ class CARE(BaseModel):
         self._model_prepared = True
 
 
-    def train(self, X,Y, validation_data, epochs=None, steps_per_epoch=None):
+    def train(self, X, Y, validation_data, epochs=None, steps_per_epoch=None):
         """Train the neural network with the given data.
 
         Parameters

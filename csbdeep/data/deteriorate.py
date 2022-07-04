@@ -1,6 +1,5 @@
 from scipy.ndimage.filters import gaussian_filter
-from PIL import Image, ImageFilter
-#from libtiff import TIFF
+from tifffile import imread
 import numpy as np
 import tqdm
 import cv2
@@ -43,7 +42,7 @@ def create_noised_inputs(data_path, gaussian_blur, gaussian_sigma, poisson_noise
             img_path = data_path + "/" + folder + "/GT/" + file
             img_noised_path = data_path + "/" + folder + "/low/" + file
 
-            img = Image.open(img_path)
+            img = imread(img_path)
             img = np.array(img)
             img_noised = img.copy()
 
