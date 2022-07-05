@@ -130,27 +130,25 @@ def loss_ssim_focus():
 
 def loss_mae_ssim():
     def mae_ssim(y_true, y_pred):
-        val_ssim = - loss_ssim_focus(y_true, y_pred)
-        val_mae = - loss_mae_focus(y_true, y_pred)
-        return -(0.3 * val_ssim + 0.7 * val_mae)
-
+        val_ssim = - loss_ssim_focus()(y_true, y_pred)
+        val_mae = - loss_mae_focus()(y_true, y_pred)
+        return -(0.5 * val_ssim + 0.5 * val_mae)
     return mae_ssim
 
 
 def loss_mae_psnr():
     def mae_psnr(y_true, y_pred):
-        val_psnr = - loss_psnr_focus(y_true, y_pred)
-        val_mae = - loss_mae_focus(y_true, y_pred)
-        return -(0.3 * val_psnr + 0.7 * val_mae)
-
+        val_psnr = - loss_psnr_focus()(y_true, y_pred)
+        val_mae = - loss_mae_focus()(y_true, y_pred)
+        return -(0.5 * val_psnr + 0.5 * val_mae)
     return mae_psnr
 
 
 def loss_psnr_ssim():
     def psnr_ssim(y_true, y_pred):
-        val_psnr = - loss_psnr_focus(y_true, y_pred)
-        val_ssim = - loss_ssim_focus(y_true, y_pred)
-        return -(0.3 * val_psnr + 0.7 * val_ssim)
+        val_psnr = - loss_psnr_focus()(y_true, y_pred)
+        val_ssim = - loss_ssim_focus()(y_true, y_pred)
+        return -(0.5 * val_psnr + 0.5 * val_ssim)
 
     return psnr_ssim
 
@@ -303,6 +301,18 @@ def PSNR_focus(pred, target, name_image='', save=False):
     psnr = round(PSNR(array_pred, array_target), 3)
     return psnr
 
+
+def area_of_interest(y_true, y_pred, name_image='', save=False):
+    img_filter = no_background_patches_zscore()
+    pred_filter = img_filter(y_pred, image_name=name_image + '_pred', save=save)
+    true_filter = img_filter(y_true, image_name=name_image + '_target', save=save)
+
+    # Keep the union of information location
+    common_filter = np.logical_or(pred_filter, true_filter)
+    array_pred = y_pred[common_filter == 1]
+    array_true = y_true[common_filter == 1]
+
+    return array_true, array_pred
 
 def SSIM_focus(pred, target, name_image='', save=False):
     img_filter = no_background_patches_zscore()

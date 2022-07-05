@@ -271,3 +271,11 @@ class PadAndCropResizer(Resizer):
         )
         # print(crop)
         return x[crop]
+
+
+def normalize_multiple(datas, normalizer=PercentileNormalizer()):
+    normalized = []
+    for elem in datas:
+        norm = normalizer.before(elem, axes='YX')
+        normalized.append(norm)
+    return normalized

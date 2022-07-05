@@ -518,7 +518,7 @@ def shuffle_inplace(*arrs, **kwargs):
 # ----------------------------------------- MITOCHONDRIA PART ---------------------------------------------
 # ---------------------------------------------------------------------------------------------------------
 
-def cut_patches_in_image(datas, patch_size, image_name='', delete_black_patches=True, occup_min=0.02):
+def cut_patches_in_image(datas, patch_size, image_name='', delete_black_patches=True, occup_min=0.02, overlap=0):
     """Cut images in patches with the method of a grid.
 
     Use the previous calculation of how many patches can fulfill the height and width (round to ceil), leading to
@@ -549,8 +549,14 @@ def cut_patches_in_image(datas, patch_size, image_name='', delete_black_patches=
     patches_y = []
     nb_saved_patch = 1
     nb_patch = 1
-    n_height = math.ceil(x.shape[0] / patch_size[0])
+
+    n_height = math.ceil(x.shape[0]/ patch_size[0])
+    new_shape_x = x.shape[0] + (n_height - 1) * overlap
+    n_height = math.ceil(new_shape_x/ patch_size[0])
+
     n_width = math.ceil(x.shape[1] / patch_size[1])
+    new_shape_y = x.shape[1] + (n_width - 1) * overlap
+    n_width = math.ceil(new_shape_y / patch_size[0])
 
     # Checks
     assert (each_patch_size > 0 and (type(each_patch_size) is int) for each_patch_size in patch_size)
@@ -574,8 +580,8 @@ def cut_patches_in_image(datas, patch_size, image_name='', delete_black_patches=
     # Create patches
     for i in range(n_height):
         for j in range(n_width):
-            end_height = i * patch_size[0] + patch_size[0]
-            end_width = j * patch_size[1] + patch_size[1]
+            end_height = i * patch_size[0] + patch_size[0] - overlap * i
+            end_width = j * patch_size[1] + patch_size[1] - overlap * j
 
             # We are in the bottom right corner of the image
             if end_height > x.shape[0] and end_width > x.shape[1]:
@@ -586,24 +592,24 @@ def cut_patches_in_image(datas, patch_size, image_name='', delete_black_patches=
 
             # We are on the bottom of the image
             elif end_height > x.shape[0]:
-                start_width = j * patch_size[1]
+                start_width = j * (patch_size[1] - overlap)
                 start_height = x.shape[0] - patch_size[0]
-                end_width = j * patch_size[1] + patch_size[1]
+                end_width = start_width + patch_size[1]
                 end_height = x.shape[0]
 
             # We are on the right of the image
             elif end_width > x.shape[1]:
-                start_height = i * patch_size[0]
+                start_height = i * (patch_size[0] - overlap)
                 start_width = x.shape[1] - patch_size[1]
-                end_height = i * patch_size[0] + patch_size[0]
+                end_height = start_height + patch_size[0]
                 end_width = x.shape[1]
 
             # We do not touch an end corner of the image
             else:
-                start_height = i * patch_size[0]
-                end_height = i * patch_size[0] + patch_size[0]
-                start_width = j * patch_size[1]
-                end_width = j * patch_size[1] + patch_size[1]
+                start_height = i * (patch_size[0] - overlap)
+                end_height = start_height + patch_size[0]
+                start_width = j * (patch_size[1] - overlap)
+                end_width = start_width + patch_size[1]
 
             # Finally
             patch_x, patch_y = x[start_height:end_height, start_width:end_width], y[start_height:end_height,
