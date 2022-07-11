@@ -1,32 +1,30 @@
 from __future__ import print_function, unicode_literals, absolute_import, division
 
-import numpy as np
-from tifffile import imread
 import matplotlib.pyplot as plt
+from tifffile import imread
+import tensorflow as tf
+import numpy as np
 import argparse
 import datetime
-
-import tensorflow as tf
-tf.debugging.disable_traceback_filtering()
+import cv2
 
 from csbdeep.utils import normalize, extract_zip_file
 from csbdeep.data import RawData, create_patches, create_patches_mito, no_background_patches, norm_percentiles, sample_percentiles, create_test_patches
 from csbdeep.data.deteriorate import create_noised_inputs
 
-
 from csbdeep.utils import axes_dict, plot_some, plot_history, Path, download_and_extract_zip_file, save_figure, normalize_0_255
-#from csbdeep.utils.plot_utils import plot_multiple_ssim_maps
 from csbdeep.io import load_training_data
 from csbdeep.models import Config, CARE
 from csbdeep.internals.losses import plot_multiple_ssim_maps
-from csbdeep.internals.predict import restore_and_eval_test, restore_and_eval
+from csbdeep.internals.predict import restore_and_eval_test, eval_metrics
 
-# -----------------------------
-# -------- Time saving ----------
-# -----------------------------
+
 def launch(loss):
     from csbdeep.data.transform import flip_vertical, flip_90, flip_180, flip_270, zoom_aug
 
+    # -----------------------------
+    # -------- Time saving ----------
+    # -----------------------------
     date = datetime.datetime.now()
     month = date.month
     day = date.day
@@ -40,18 +38,21 @@ def launch(loss):
     # -------- Global parameters settings ----------
     # ----------------------------------------------
     # Fixed
+    create_patches_with_care = False
     initial_care = False
     save_fig = True
     predicting = True
     build_data = True
     base_dir = 'fig/' + moment
+    data_dir = 'data_mito'
 
-    # Non fixed
-    create_patches_with_care = False
-    data_dir = 'data_mito_patch'
+    # Goal
+    predict_one_img = False
     multiple_maps = False
     fine_tuning = False
+    train = True
     load = False
+
 
     # ----------------------------------
     # -------- Plot SSIM maps ----------
@@ -107,8 +108,8 @@ def launch(loss):
         flip_270 = flip_270(axes)
         zoom_aug = zoom_aug(axes)
 
-        transforms = [flip_vertical, flip_90, flip_180, flip_270]
-        #transforms = None
+        #transforms = [flip_vertical, flip_90, flip_180, flip_270]
+        transforms = None
 
         if create_patches_with_care:
             X, Y, XY_axes = create_patches(
@@ -169,17 +170,15 @@ def launch(loss):
         n_channel_in, n_channel_out = X.shape[c], Y.shape[c]
 
 
-
     # ---------------------------------
     # -------- Train the model --------
     # ---------------------------------
-
-    if not load:
-        config = Config(axes, n_channel_in, n_channel_out, train_loss=loss, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=300)
+    if train:
+        config = Config(axes, n_channel_in, n_channel_out, train_loss=loss, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=5)
         vars(config)
         model = CARE(config, 'my_model', basedir=base_dir, name_weights='best')
         model.keras_model.summary()
-        history = model.train(X, Y, validation_data=(X_val, Y_val), epochs=200)
+        history = model.train(X, Y, validation_data=(X_val, Y_val), epochs=1)
 
         # Plot history
         plt.figure(figsize=(16, 5))
@@ -188,12 +187,18 @@ def launch(loss):
         save_figure(moment, 'history')
 
 
+    # --------------------------------
+    # -------- Load the model --------
+    # --------------------------------
+    elif load:
+        model = CARE(config=None, name='my_model', basedir='archives/finalTable/ssim_focus', name_weights='weights_best.h5')
+        model.keras_model.summary()
+
+
     # ---------------------------------
     # -------- Fine Tuning  -----------
     # ---------------------------------
-
-    if fine_tuning:
-        # Load weights automatically inside CARE class
+    elif fine_tuning:
         model_trf = CARE(config=None, name='my_model', basedir='archives/trainings/careWeights', name_weights='weights_best.h5', logdir_save=base_dir)
         layers_care = model_trf.keras_model.layers
 
@@ -204,18 +209,26 @@ def launch(loss):
         history = model_trf.train(X, Y, validation_data=(X_val, Y_val), epochs=100, steps_per_epoch=50)
         model = model_trf
 
-    # --------------------------------
-    # -------- Load the model --------
-    # --------------------------------
+    if predict_one_img:
+        x = imread('tests/cell16.tif')
+        restored = model.predict(x, axes= 'YX')
 
-    #else:
-     #   model = CARE(config=None, name='my_model', basedir='archives/trainings/careWeights', name_weights='weights_best.h5')
+        # Plot GT, prediction and SSIM maps
+        plt.figure(figsize=(15, 10))
+        plt.subplot(1, 2, 1)
+        plt.title('Original')
+        plt.imshow(x)
+        plt.subplot(1, 2, 2)
+        plt.title('Prediction')
+        plt.imshow(restored)
+        plt.savefig("tests/sspred16.png", bbox_inches='tight')
+
+        cv2.imwrite('tests/predssim16.tif', restored)
 
 
     # ---------------------------------------------
     # -------- Testings and predictions -----------
     # ---------------------------------------------
-
     if predicting:
         psnrs, ssims, psnrs_focus, ssims_focus, _, _ = restore_and_eval_test(model, 'YX', data_dir, moment)
 
@@ -239,9 +252,10 @@ def launch(loss):
         restored = model.predict(x, axes)
         plt.figure(figsize=(12, 6))
         plot_some(np.stack([x, restored, y]), title_list=[['low', 'CARE', 'GT']], pmin=2, pmax=99.8)
-        _, _, psnrs_plot, ssims_plot, _, _, psnrs_low_plot, ssims_low_plot = restore_and_eval((y, x, restored), original=True)
-        plt.suptitle(f"Low: PSNR: {round(psnrs_low_plot[0], 2)} - SSIM: {round(ssims_low_plot[0], 2)}\n"
-                     f"Prediction: PSNR: {round(psnrs_plot[0], 2)} - SSIM: {round(ssims_plot[0], 2)}")
+        psnrs_f, ssims_f = eval_metrics((y, x), focus=True)
+        psnrs_f_low, ssims_f_low = eval_metrics((y, restored), focus=True)
+        plt.suptitle(f"Low: PSNR: {round(psnrs_f_low[0], 2)} - SSIM: {round(ssims_f_low[0], 2)}\n"
+                     f"Prediction: PSNR: {round(psnrs_f[0], 2)} - SSIM: {round(ssims_f[0], 2)}")
         save_figure(moment, 'pred_img')
 
         # Watch signal per pixel
@@ -254,21 +268,21 @@ def launch(loss):
         # Evaluation
         plt.figure(figsize=(20, 12))
         #idx = [4,5,8,11,15]
-        idx = [58,29,60,61,62]
+        idx = [58, 29, 60, 61, 62]
         X_val_set = np.array([X_val[i] for i in idx])
         Y_val_set = np.array([Y_val[i] for i in idx])
         _P = model.keras_model.predict(X_val_set)
-        _, _, psnrs, ssims = restore_and_eval((Y_val_set, X_val_set, _P))
+        psnrs_f, ssims_f = eval_metrics((Y_val_set, _P), focus=True)
         plot_some(X_val_set, Y_val_set, _P, pmax=99.5)
         plt.suptitle('5 example validation patches\n'      
                     'top row: input (source),  '          
                     'middle row: target (ground truth),  '
                     'bottom row: predicted from source \n\n'
-                     f'1 : PSNR: {round(psnrs[0], 2)} - SSIM: {round(ssims[0], 2)}             '
-                     f'2 : PSNR: {round(psnrs[1], 2)} - SSIM: {round(ssims[1], 2)}             '
-                     f'3 : PSNR: {round(psnrs[2], 2)} - SSIM: {round(ssims[2], 2)}             '
-                     f'4 : PSNR: {round(psnrs[3], 2)} - SSIM: {round(ssims[3], 2)}             '
-                     f'5 : PSNR: {round(psnrs[4], 2)} - SSIM: {round(ssims[4], 2)}')
+                     f'1 : PSNR: {round(psnrs_f[0], 2)} - SSIM: {round(ssims_f[0], 2)}             '
+                     f'2 : PSNR: {round(psnrs_f[1], 2)} - SSIM: {round(ssims_f[1], 2)}             '
+                     f'3 : PSNR: {round(psnrs_f[2], 2)} - SSIM: {round(ssims_f[2], 2)}             '
+                     f'4 : PSNR: {round(psnrs_f[3], 2)} - SSIM: {round(ssims_f[3], 2)}             '
+                     f'5 : PSNR: {round(psnrs_f[4], 2)} - SSIM: {round(ssims_f[4], 2)}')
         save_figure(moment, '5preds')
 
         # SAVE model
@@ -279,82 +293,11 @@ if __name__ == '__main__':
     parser.add_argument("-l", action='store', dest='loss', required=True)
     args = parser.parse_args()
 
+    # print std
     if False:
-        from csbdeep.data.transform import flip_vertical, flip_90, flip_180, flip_270, zoom_aug
-        date = datetime.datetime.now()
-        month = date.month
-        day = date.day
-        hour = date.hour
-        min = date.minute
-        sec = date.second
-        moment = str(month) + '-' + str(day) + '_' + str(hour) + '-' + str(min) + '_' + str(sec)
-
-        # Fixed
-        initial_care = False
-        save_fig = False
-        predicting = True
-        build_data = False
-        base_dir = 'fig/' + moment
-
-        # Non fixed
-        create_patches_with_care = False
-        data_dir = 'data_mito_patch'
-        multiple_maps = False
-        fine_tuning = False
-        load = False
-
-        if build_data:
-            # Extract zip file
-            extract_zip_file(
-                folder_path='/net/serpico-fs2/spapereu/' + data_dir,
-                targetdir=data_dir,
-            )
-
-            # Create noised images
-            create_noised_inputs(
-                data_path=data_dir,
-                gaussian_blur=3,
-                gaussian_sigma=5,
-                poisson_noise=False,
-            )
-
-        # Generate training data
-        raw_data = RawData.from_folder(
-            basepath=data_dir + '/train',
-            source_dirs=['low'],
-            target_dir='GT',
-            axes='YX',
-        )
-
-        axes = 'YX'
-        flip_vertical = flip_vertical(axes)
-        flip_90 = flip_90(axes)
-        flip_180 = flip_180(axes)
-        flip_270 = flip_270(axes)
-        zoom_aug = zoom_aug(axes)
-
-        transforms = [flip_vertical, flip_90, flip_180, flip_270]
-
-        # Creation of patches
-        X, Y, XY_axes = create_patches_mito(
-            raw_data=raw_data,
-            patch_size=(128, 128),
-            data_path=data_dir,
-            transforms=transforms,
-            cut_or_sample_patch='sample',
-            delete_black_patches=True,
-            save_file=data_dir + '/my_training_' + data_dir + '.npz',
-            )
-
-        # Split into training and validation data
-        (X, Y), (X_val, Y_val), axes = load_training_data(data_dir + '/my_training_' + data_dir + '.npz',
-                                                          validation_split=0.1, verbose=True)
-        c = axes_dict(axes)['C']
-        n_channel_in, n_channel_out = X.shape[c], Y.shape[c]
-        model = CARE(config=None, name='my_model', basedir='archives/finalTable/mae',
-                         name_weights='weights_best.h5')
-        restore_and_eval_test(model, axes='YX', data_dir=data_dir, moment=moment)
-
+        x = imread('data_mito/train/GT/IMG0003.STED.ome.tif')
+        x2 = (x - np.median(x)) / 3.7
+        cv2.imwrite('todelete/imagetest5.png', x2)
 
     if True:
         launch(args.loss)

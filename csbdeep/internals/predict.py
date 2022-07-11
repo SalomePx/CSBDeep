@@ -1,10 +1,10 @@
 from __future__ import print_function, unicode_literals, absolute_import, division
 from six.moves import range, zip, map, reduce, filter
 
-from ..utils import _raise, consume, move_channel_for_backend, backend_channels_last, axes_check_and_normalize, axes_dict, create_dir, normalize_0_255, plot_some, save_figure
-from csbdeep.internals.losses import SNR, PSNR, ssim_maps, SSIM_focus, PSNR_focus, area_of_interest
+from ..utils import _raise, move_channel_for_backend, backend_channels_last, axes_check_and_normalize, axes_dict, create_dir, normalize_0_255, plot_some, save_figure
+from csbdeep.internals.losses import psnr, ssim_maps, ssim_focus, psnr_focus, area_of_interest
 from ..data.generate import cut_patches_in_image
-from ..data.prepare import normalize_multiple
+from ..data.prepare import normalize_percentile
 
 
 from skimage.metrics import structural_similarity as ssim
@@ -70,14 +70,21 @@ def predict_per_patch(keras_model, x, axes_in, axes_out=None, patch_size=(128, 1
     new_shape_y = x.shape[1] + (n_width_old - 1) * overlap
     n_width = math.ceil(new_shape_y / patch_size[0])
 
+    print("n_width_old : ", n_width_old)
+    print("n_width : ", n_width)
+    print("n_height_old : ", n_height_old)
+    print("n_height : ", n_height)
+
     overlap_x, overlap_y = n_height * patch_size[0] - (n_height -1) * overlap - x.shape[0], n_width * patch_size[1] - (n_width - 1) * overlap - x.shape[1]
 
-    patches, _ = cut_patches_in_image((x, x), patch_size=patch_size, delete_black_patches=False)
+    patches, _ = cut_patches_in_image((x, x), patch_size=patch_size, delete_black_patches=False, overlap=overlap)
     final_pred = np.zeros(x.shape)
     all_pred = [[] for i in range(n_height)]
     for i, patch in enumerate(patches):
         row = math.floor(i / n_width)
         col  = i % n_width
+        print(f"Row : {row}")
+        print(f"Col : {col}")
 
         tensor_patch = to_tensor(patch, single_sample=single_sample)
         pred = from_tensor(keras_model.keras_model.predict(tensor_patch, **kwargs), channel=channel_out, single_sample=single_sample)
@@ -102,9 +109,29 @@ def predict_per_patch(keras_model, x, axes_in, axes_out=None, patch_size=(128, 1
 
             final_pred[end_pad_height:, end_pad_width:] = pred[overlap_x:, overlap_y:]
 
+        elif col==0 and row==0:
+            final_pred[:patch_size[0] - overlap, :patch_size[1] - overlap] = pred[:patch_size[0] - overlap, :patch_size[1] - overlap]
+
+        elif col==0 and row==n_height-1:
+            begin_pad_height, end_pad_height = 0, patch_size[0] - overlap
+            begin_pad_width, end_pad_width = col * (patch_size - overlap), (col + 1) * (patch_size[1]) - overlap * col
+
+            patch_left = all_pred[row][col - 1][patch_size[0] - overlap:, patch_size[1] - overlap]
+            final_pred[begin_pad_height:end_pad_height, begin_pad_width: end_pad_width] = (patch_left + pred[patch_size[0] - overlap,:overlap]) / 2
+            final_pred[:patch_size[0] - overlap, x.shape[1] - overlap] = pred[:patch_size[0] - overlap, overlap:]
+
+
+        elif col == n_width - 1 and row==0:
+            begin_pad_height, end_pad_height = row * (patch_size - overlap), (row + 1) * (patch_size[1]) - overlap * row
+            begin_pad_width, end_pad_width = 0, patch_size[1] - overlap
+
+            patch_top = all_pred[row][col - 1][:overlap, patch_size[1] - overlap]
+            final_pred[begin_pad_height:end_pad_height, begin_pad_width: end_pad_width] = (patch_top + pred[:overlap, patch_size[1] - overlap]) / 2
+            final_pred[end_pad_height: end_pad_height - overlap + patch_size[0] - overlap, x.shape[1] - overlap] = pred[:patch_size[0] - overlap, overlap:]
+
         elif row == n_height-1:
-            begin_pad_width, end_pad_width = col * (patch_size[1] - overlap), (col + 1) * (patch_size[1] - overlap)
-            begin_pad_height, end_pad_height = x.shape[0] - patch_size[0], row * (patch_size[0] - overlap)
+            begin_pad_width, end_pad_width = col * (patch_size[1] - overlap), (col + 1) * (patch_size[1]) - overlap * col
+            begin_pad_height, end_pad_height = x.shape[0] - patch_size[0], row * (patch_size[0]) - overlap * row
 
             patch_top = all_pred[row - 1][col][patch_size[0]-overlap_x:, :]
 
@@ -113,16 +140,22 @@ def predict_per_patch(keras_model, x, axes_in, axes_out=None, patch_size=(128, 1
 
         elif col == n_width-1:
             begin_pad_width, end_pad_width = x.shape[1] - patch_size[1], col * (patch_size[1] - overlap)
-            begin_pad_height, end_pad_height = row * (patch_size[0] - overlap), (row + 1) * (patch_size[0] - overlap)
+            begin_pad_height, end_pad_height = row * (patch_size[0] - overlap), (row + 1) * (patch_size[0]) - overlap * row
 
             patch_left = all_pred[row][col-1][:, patch_size[1]-overlap_y:]
             final_pred[begin_pad_height:end_pad_height, begin_pad_width:end_pad_width] = (patch_left + pred[:,:overlap_y]) / 2
             final_pred[begin_pad_height:end_pad_height, end_pad_width:] = pred[:, overlap_y:]
 
-        else:
-            begin_pad_width, end_pad_width = col * (patch_size[1] - overlap), (col + 1) * (patch_size[1] - overlap)
-            begin_pad_height, end_pad_height = row * (patch_size[0] - overlap), (row + 1) * (patch_size[0] - overlap)
-            final_pred[begin_pad_height:end_pad_height, begin_pad_width:end_pad_width] = pred
+
+
+        elif row==0:
+            begin_pad_height, end_pad_height = 0, patch_size[0] - overlap
+            begin_pad_width, end_pad_width = col * (patch_size - overlap), (col + 1) * (patch_size[1]) - overlap * col
+
+            patch_left = all_pred[row][col-1][patch_size[0]-overlap:, patch_size[1]-overlap]
+
+            final_pred[begin_pad_height:end_pad_height, begin_pad_width: end_pad_width] = (patch_left + pred[patch_size[0] - overlap, :overlap]) / 2
+            final_pred[begin_pad_height:end_pad_height, patch_size * col: patch_size[1] - overlap] = pred[patch_size[0] - overlap, overlap: patch_size[1] - overlap]
 
     len(axes_out) == pred.ndim or _raise(ValueError())
     return final_pred
@@ -556,135 +589,94 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, patch_size=(128,1
     create_dir('fig/' + moment + '/compare_maps')
     create_dir('fig/' + moment + '/ssim_maps')
 
-    psnrs = []
-    ssims = []
-    psnrs_focus = []
-    ssims_focus = []
-    maes = []
-    mses = []
-    maes_focus = []
-    mses_focus = []
+    psnrs, psnrs_focus = [], []
+    ssims, ssims_focus = [], []
+    maes, maes_focus = [], []
+    mses, mses_focus = [], []
 
     if verbose:
         print('=' * 66)
 
     for i, img in enumerate(images_test):
 
+        # Load image
         name_img = img.split('.')[0]
         x = imread(data_dir + '/test/low/' + img)
         y = imread(data_dir + '/test/GT/' + img)
         restored = keras_model.predict(x, axes)
-        #restored = predict_per_patch(keras_model, x, axes, patch_size=patch_size)
+        # restored = predict_per_patch(keras_model, x, axes, patch_size=patch_size, overlap=10)
 
-        # Plot GT, prediction and SSIM maps
-        plt.figure(figsize=(15, 10))
-        plt.subplot(1, 3, 1)
-        plt.title('Ground truth')
-        plt.imshow(y)
-        plt.subplot(1, 3, 2)
-        plt.title('Prediction')
-        plt.imshow(restored)
-        plt.subplot(1, 3, 3)
-        plt.title('SSIM maps')
-        map = ssim_maps(restored, y)
-        plt.imshow(map, interpolation='nearest', cmap='viridis')
-        plt.colorbar()
-        plt.savefig("fig/" + moment + "/compare_maps/" + name_img + ".png", bbox_inches='tight')
-
-        # Save ssim maps
+        # Save SSIM maps
         plt.figure(figsize=(15, 6))
         plt.imshow(map, interpolation='nearest', cmap='viridis')
         plt.colorbar()
         plt.savefig("fig/" + moment + "/ssim_maps/" + name_img + ".png", bbox_inches='tight')
 
+        # Save prediction in color and original
         plt.figure(figsize=(12, 4.5))
         plot_some(np.stack([x, restored, y]), title_list=[['low', 'CARE', 'GT']], pmin=2, pmax=99.8)
-        _, _, psnrs_focus_plot, ssims_focus_plot, _, _, psnrs_focus_low_plot, ssims_focus_low_plot = \
-            restore_and_eval((y, x, restored), original=True, img_name=name_img)
-        plt.suptitle(f"Low: PSNR: {round(psnrs_focus_low_plot[0], 2)} - SSIM: {round(ssims_focus_low_plot[0], 2)}\n"
-                     f"Prediction: PSNR: {round(psnrs_focus_plot[0], 2)} - SSIM: {round(ssims_focus_plot[0], 2)}")
+        psnrs_f, ssims_f = eval_metrics((y, restored), focus=True)
+        psnrs_f_low, ssims_f_low = eval_metrics((y, x), focus=True)
+        plt.suptitle(f"Low: PSNR: {round(psnrs_f_low[0], 2)} - SSIM: {round(ssims_f_low[0], 2)}\n"
+                     f"Prediction: PSNR: {round(psnrs_f[0], 2)} - SSIM: {round(ssims_f[0], 2)}")
         save_figure(moment, '1pred_' + str(name_img))
-
         path_save = dir_pred + name_img + '.tif'
         cv2.imwrite(path_save, restored)
+
+        # Calculate metrics
         y_norm, x_norm, restored_norm = normalize_0_255([y, x, restored])
-        psnr_img = round(PSNR(restored_norm, y_norm), 2)
-        psnr_focus_img = round(PSNR_focus(restored_norm, y_norm), 2)
-        ssim_img = round(ssim(restored_norm, y_norm, data_range=255), 2)
-        ssim_focus_img = round(SSIM_focus(restored_norm, y_norm, ), 2)
-        y_perc, x_perc, restored_perc = normalize_multiple([y, x, restored])
-        mae_img = round(np.mean(np.abs(y_perc - restored_perc)), 2)
-        mse_img = round(np.square(np.subtract(y_perc, restored_perc)).mean(), 2)
+        psnr = round(psnr(restored_norm, y_norm), 2)
+        psnr_f = round(psnr_focus(y_norm, restored_norm), 2)
+        ssim = round(ssim(restored_norm, y_norm, data_range=255), 2)
+        ssim_f = round(ssim_focus(restored_norm, y_norm, ), 2)
+        y_perc, x_perc, restored_perc = normalize_percentile([y, x, restored])
+        mae = round(np.mean(np.abs(y_perc - restored_perc)), 2)
+        mse = round(np.square(np.subtract(y_perc, restored_perc)).mean(), 6)
         y_true, y_pred = area_of_interest(y_perc, restored_perc)
-        mae_focus_img = round(np.mean(np.abs(y_true - y_pred)), 2)
-        mse_focus_img = round(np.square(np.subtract(y_true, y_pred)).mean(), 2)
+        mae_f = round(np.mean(np.abs(y_true - y_pred)), 2)
+        mse_f = round(np.square(np.subtract(y_true, y_pred)).mean(), 2)
 
         if verbose:
-            print(f"Prediction {name_img} - PSNR : {round(psnr_img, 2)} - PSNR focus: {round(psnr_focus_img, 2)} - SSIM: {round(ssim_img, 2)} - SSIM focus: {round(ssim_focus_img, 2)} - MAE: {round(mae_img, 2)}  - MAE focus: {round(mae_focus_img, 2)}  - MSE: {round(mse_img, 2)} - MSE focus: {round(mse_focus_img, 2)}")
-        psnrs.append(psnr_img)
-        ssims.append(ssim_img)
-        maes.append(mae_img)
-        mses.append(mse_img)
-        psnrs_focus.append(psnr_focus_img)
-        ssims_focus.append(ssim_focus_img)
-        mses_focus.append(mse_focus_img)
-        maes_focus.append(mae_focus_img)
+            print(f"Prediction {name_img} - PSNR : {round(psnr, 2)} - PSNR focus: {round(psnr_f, 2)} - SSIM: {round(ssim, 2)} - SSIM focus: {round(ssim_f, 2)} - MAE: {round(mae, 2)}  - MAE focus: {round(mae_f, 2)}  - MSE: {round(mse, 2)} - MSE focus: {round(mse_f, 2)}")
+        psnrs.append(psnr)
+        ssims.append(ssim)
+        maes.append(mae)
+        mses.append(mse)
+        psnrs_focus.append(psnr_f)
+        ssims_focus.append(ssim_f)
+        mses_focus.append(mse_f)
+        maes_focus.append(mae_f)
 
     if verbose:
         print(f"Mean of testing predictions: PSNR: {round(np.mean(psnrs), 2)} - PSNR focus : {round(np.mean(psnrs_focus),2)} SSIM: {round(np.mean(ssims), 2)} - SSIM focus : {round(np.mean(ssims_focus),2)} - MAE: {round(np.mean(maes), 2)} - MAE focus: {round(np.mean(maes_focus), 2)}  - MSE: {round(np.mean(mses), 2)} - MSE focus: {round(np.mean(mses_focus), 2)} ")
         print('=' * 66)
 
-    return psnrs, ssims, maes, mses,  psnrs_focus, ssims_focus, maes_focus, mses_focus
+    return psnrs, ssims, maes, mses, psnrs_focus, ssims_focus, maes_focus, mses_focus
 
 
-def restore_and_eval(datas, original=False, img_name=''):
+def eval_metrics(datas, focus=False, img_name=''):
 
-    Y_val, X_val, restored_val = datas
+    y, x = datas
     psnrs = []
-    psnrs_focus = []
-    ssims_focus = []
     ssims = []
-    psnrs_low = []
-    ssims_low = []
-    psnrs_focus_low = []
-    ssims_focus_low = []
-    one_eval = (True if Y_val.ndim == 2 else False)
+    one_eval = (True if y.ndim == 2 else False)
 
-    for i in range(len(Y_val)):
+    for i in range(len(y)):
 
         if one_eval:
-            y_norm, x_norm, restored_norm = normalize_0_255([Y_val, X_val, restored_val])
+            y_norm, x_norm = normalize_0_255([y, x])
         else:
-            y, x, restored = Y_val[i].squeeze(), X_val[i].squeeze(), restored_val[i].squeeze()
-            y_norm, x_norm, restored_norm = normalize_0_255([y, x, restored])
+            y, x = y[i].squeeze(), x[i].squeeze()
+            y_norm, x_norm = normalize_0_255([y, x])
 
-        psnr_focus_img = round(PSNR_focus(restored_norm, y_norm, name_image=img_name), 2)
-        ssim_focus_img = round(SSIM_focus(restored_norm, y_norm, name_image=img_name), 2)
-        psnr_img = round(PSNR(restored_norm, y_norm), 2)
-        ssim_img = round(ssim(restored_norm, y_norm), 2)
-        psnrs.append(psnr_img)
-        ssims.append(ssim_img)
-        psnrs_focus.append(psnr_focus_img)
-        ssims_focus.append(ssim_focus_img)
+        if focus:
+            snr = round(psnr_focus(y_norm, x_norm, name_image=img_name), 2)
+            ssim = round(ssim_focus(y_norm, x_norm, name_image=img_name), 2)
+        else:
+            snr = round(psnr(y_norm, x_norm), 2)
+            ssim = round(ssim(y_norm, x_norm), 2)
 
+        psnrs.append(snr)
+        ssims.append(ssim)
 
-        if original:
-            psnr_low = round(PSNR_focus(x_norm, y_norm, name_image=img_name), 2)
-            ssim_low = round(SSIM_focus(x_norm, y_norm, name_image=img_name), 2)
-            psnr_focus_low = round(PSNR_focus(x_norm, y_norm, name_image=img_name), 2)
-            ssim_focus_low = round(SSIM_focus(x_norm, y_norm, name_image=img_name), 2)
-            psnrs_low.append(psnr_low)
-            ssims_low.append(ssim_low)
-            psnrs_focus_low.append(psnr_focus_low)
-            ssims_focus_low.append(ssim_focus_low)
-
-        if one_eval:
-            if original:
-                return psnrs, ssims, psnrs_focus, ssims_focus, psnrs_low, ssims_low, psnrs_focus_low, ssims_focus_low
-            else:
-                return psnrs, ssims, psnrs_focus, ssims_focus
-
-    if original:
-        return psnrs, ssims, psnrs_focus, ssims_focus, psnrs_low, ssims_low, psnrs_focus_low, ssims_focus_low
-
-    return psnrs, ssims, psnrs_focus, ssims_focus
+    return psnrs, ssims

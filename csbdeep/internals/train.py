@@ -2,7 +2,7 @@ from __future__ import print_function, unicode_literals, absolute_import, divisi
 from six.moves import range, zip, map, reduce, filter
 
 from ..utils import _raise, move_channel_for_backend, axes_dict, axes_check_and_normalize, backend_channels_last
-from ..internals.losses import loss_laplace, loss_mse, loss_mae, loss_thresh_weighted_decay, loss_psnr, loss_ssim, loss_mae_focus, loss_mse_focus, loss_psnr_focus, loss_ssim_focus, loss_psnr_ssim, loss_mae_psnr, loss_mae_ssim
+from ..internals.losses import loss_laplace, loss_mse, loss_mae, loss_thresh_weighted_decay, loss_psnr, loss_ssim, loss_mae_focus, loss_mse_focus, loss_psnr_focus, loss_ssim_focus, loss_psnr_ssim, loss_mae_psnr, loss_mae_ssim, loss_focal, loss_focal_cristae, loss_focal_mito
 
 import tensorflow as tf
 import numpy as np

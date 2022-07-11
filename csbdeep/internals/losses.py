@@ -13,7 +13,9 @@ from scipy import signal
 from tifffile import imread
 import tensorflow as tf
 import numpy as np
+import imutils
 import math
+import cv2
 
 K = keras_import('backend')
 
@@ -152,39 +154,41 @@ def loss_psnr_ssim():
 
     return psnr_ssim
 
+def y_common_mask(y_true, y_pred):
+    array_true = y_true.numpy().squeeze()
+    array_pred = y_pred.numpy().squeeze()
+
+    # Calculate z-score and area of interest
+    mask_true = bool_interesting(array_true)
+    mask_pred = bool_interesting(array_pred)
+
+    common_mask = np.logical_or(mask_true, mask_pred)
+    return common_mask
+
+def bool_interesting(y):
+    median_pred = np.median(y, axis=(1, 2))
+    std_pred = np.std(y, axis=(1, 2))
+    sub_pred = np.array([[median_pred, ] * y.shape[1], ] * y.shape[2]).T
+    div_pred = np.array([[std_pred, ] * y.shape[1], ] * y.shape[2]).T
+    zscore_pred = (y - sub_pred) / div_pred
+    mask_pred = zscore_pred > 1
+    return mask_pred
+
 
 def loss_focus(y_true, y_pred):
-
     batch_size = K.shape(y_true)[0]
     batch_size = batch_size.numpy()
     img_height = K.shape(y_true)[1]
     img_width = K.shape(y_true)[2]
     nb_pixels = img_height * img_width
 
-    array_true = y_true.numpy().squeeze()
-    array_pred = y_pred.numpy().squeeze()
-    array_true_1d = array_true.reshape(batch_size, nb_pixels)
-    array_pred_1d = array_pred.reshape(batch_size, nb_pixels)
+    array_true_1d = y_true.numpy().squeeze().reshape(batch_size, nb_pixels)
+    array_pred_1d = y_pred.numpy().squeeze().reshape(batch_size, nb_pixels)
 
-    # Calculate z-score and area of interest
-    median_true = np.median(array_true, axis=(1, 2))
-    std_true = np.std(array_true, axis=(1, 2))
-    sub_true = np.array([[median_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
-    div_true = np.array([[std_true, ] * array_true.shape[1], ] * array_true.shape[2]).T
-    zscore_true = (array_true - sub_true) / div_true
-    mask_true = zscore_true > 1
-
-    median_pred = np.median(array_pred, axis=(1, 2))
-    std_pred = np.std(array_pred, axis=(1, 2))
-    sub_pred = np.array([[median_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
-    div_pred = np.array([[std_pred, ] * array_pred.shape[1], ] * array_pred.shape[2]).T
-    zscore_pred = (array_pred - sub_pred) / div_pred
-    mask_pred = zscore_pred > 1
-
-    common_mask_arr = np.logical_or(mask_true, mask_pred)
-    common_mask = np.expand_dims(common_mask_arr, axis=3)
-    common_mask_1d = np.reshape(common_mask, [batch_size, nb_pixels])
-    common_mask = tf.convert_to_tensor(common_mask)
+    common_mask_arr = y_common_mask(y_true, y_pred)
+    common_mask_arr = np.expand_dims(common_mask_arr, axis=3)
+    common_mask_1d = np.reshape(common_mask_arr, [batch_size, nb_pixels])
+    common_mask = tf.convert_to_tensor(common_mask_arr)
 
     # Reshape batches in 1D
     new_y_true = tf.where(common_mask, y_true, 0.0)
@@ -245,6 +249,57 @@ def loss_focus(y_true, y_pred):
     return keep_true, keep_pred
 
 
+def loss_focal(gamma=1, mean=True):
+    R = _mean_or_not(mean)
+
+    def focal(y_true, y_pred):
+        y_true_arr = y_true.numpy().squeeze()
+        y_pred_arr = y_pred.numpy().squeeze()
+        maps = []
+        for batch_true, batch_pred in zip(y_true_arr,y_pred_arr):
+            p = ssim_maps(batch_true, batch_pred)
+            p = p.astype('float32')
+            maps.append(p)
+        maps = tf.convert_to_tensor(maps)
+        maps = tf.where(maps<0, 0, maps)
+        maps = tf.reshape(maps, y_true.shape)
+        weighted_term = (1 - maps) ** gamma
+        return R(tf.math.multiply(K.abs(y_pred - y_true), weighted_term))
+    return focal
+
+
+def loss_focal_mito(mean=True):
+    R = _mean_or_not(mean)
+
+    def focal_mito(y_true, y_pred):
+        y_true_arr = y_true.numpy().squeeze()
+        y_pred_arr = y_pred.numpy().squeeze()
+        y_true_mask = bool_interesting(y_true_arr)
+
+        gamma = tf.where(y_true_mask == True, 1, 2)
+        maps = []
+
+        for batch_true, batch_pred in zip(y_true_arr, y_pred_arr):
+            p = ssim_maps(batch_true, batch_pred)
+            p = p.astype('float32')
+            maps.append(p)
+
+        maps = tf.convert_to_tensor(maps)
+        maps = tf.where(maps<0, 0, maps)
+        maps = tf.reshape(maps, y_true.shape)
+        weighted_term = tf.math.pow((1 - maps), gamma)
+        return R(tf.math.multiply(K.abs(y_pred - y_true), weighted_term))
+    return focal_mito
+
+
+def loss_focal_cristae(gamma=1, mean=True):
+    R = _mean_or_not(mean)
+    def focal_cristae(y_true, y_pred):
+        p = - loss_ssim()(y_true, y_pred)
+        weighted_term = (1 - p) ** gamma
+        return R(K.abs(y_pred - y_true) * weighted_term)
+    return focal_cristae
+
 
 def loss_thresh_weighted_decay(loss_per_pixel, thresh, w1, w2, alpha):
     def _loss(y_true, y_pred):
@@ -257,29 +312,7 @@ def loss_thresh_weighted_decay(loss_per_pixel, thresh, w1, w2, alpha):
     return _loss
 
 
-def SNR(pred, target):
-    """
-    Compute Signal to Noise Ratio (SNR) of two images.
-    Parameters
-    ----------
-    pred : array_like
-      Prediction/comparison image
-    target : array_like
-      Reference image
-    Returns
-    -------
-    x : float
-      SNR of `pred` with respect to `target`
-    """
-
-    target_var = np.var(target)
-    noise_var = mean_squared_error(target, pred)
-    ratio = target_var / noise_var
-
-    return 10.0 * np.log10(ratio)
-
-
-def PSNR(pred, target):
+def psnr(pred, target):
     mse = np.mean((target - pred) ** 2)
     if mse == 0:
         return 100
@@ -288,7 +321,7 @@ def PSNR(pred, target):
     return psnr
 
 
-def PSNR_focus(pred, target, name_image='', save=False):
+def psnr_focus(target, pred, name_image='', save=False):
     img_filter = no_background_patches_zscore()
     pred_filter = img_filter(pred, image_name=name_image + '_pred', save=save)
     target_filter = img_filter(target, image_name=name_image + '_target', save=save)
@@ -298,8 +331,8 @@ def PSNR_focus(pred, target, name_image='', save=False):
     array_pred = pred[common_filter == 1]
     array_target = target[common_filter == 1]
 
-    psnr = round(PSNR(array_pred, array_target), 3)
-    return psnr
+    metric = round(psnr(array_pred, array_target), 3)
+    return metric
 
 
 def area_of_interest(y_true, y_pred, name_image='', save=False):
@@ -314,7 +347,8 @@ def area_of_interest(y_true, y_pred, name_image='', save=False):
 
     return array_true, array_pred
 
-def SSIM_focus(pred, target, name_image='', save=False):
+
+def ssim_focus(pred, target, name_image='', save=False):
     img_filter = no_background_patches_zscore()
     pred_filter = img_filter(pred, image_name=name_image + '_pred', save=save)
     target_filter = img_filter(target, image_name=name_image + '_target', save=save)
@@ -336,7 +370,7 @@ def fspecial_gauss(size, sigma):
     return g / g.sum()
 
 
-def ssim_maps(y_pred, y_true, focus=False, perc=99.9, threshold=0.2, cs_map=False):
+def ssim_maps(y_pred, y_true, focus=False):
     """Return the Structural Similarity Map corresponding to input images img1
     and img2 (images are assumed to be uint8)
 
@@ -354,44 +388,38 @@ def ssim_maps(y_pred, y_true, focus=False, perc=99.9, threshold=0.2, cs_map=Fals
         std_true = np.std(y_true)
         filtered_true = (y_true - median_true) / std_true
         filtered_true = np.where(filtered_true < 0, 0.0, filtered_true)
-        perc_true = np.percentile(filtered_true.numpy(), perc)
-        mask_true = filtered_true > threshold * perc_true
+        mask_true = filtered_true > 1
 
         # Calculate area of interest for pred
         median_pred = np.median(y_pred)
         std_pred = np.std(y_pred)
         filtered_pred = (y_pred - median_pred) / std_pred
         filtered_pred = np.where(filtered_pred < 0, 0, filtered_pred)
-        perc_pred = np.percentile(filtered_pred, perc)
-        mask_pred = filtered_pred > threshold * perc_pred
+        mask_pred = filtered_pred > 1
 
         # Calculate common area of interest
         common_mask = np.logical_or(mask_true, mask_pred)
         y_pred = np.where(common_mask == False, y_true, y_pred)
 
-    size = 11
-    sigma = 1.5
+    size, sigma, L = 11, 1.5, 255
+    K1, K2 = 0.01, 0.03
+    C1, C2 = (K1 * L) ** 2, (K2 * L) ** 2
+
     window = fspecial_gauss(size, sigma)
-    K1 = 0.01
-    K2 = 0.03
-    L = 255
-    C1 = (K1 * L) ** 2
-    C2 = (K2 * L) ** 2
-    mu1 = signal.fftconvolve(window, y_pred, mode='valid')
-    mu2 = signal.fftconvolve(window, y_true, mode='valid')
-    mu1_sq = mu1 * mu1
-    mu2_sq = mu2 * mu2
-    mu1_mu2 = mu1 * mu2
-    sigma1_sq = signal.fftconvolve(window, y_pred * y_pred, mode='valid') - mu1_sq
-    sigma2_sq = signal.fftconvolve(window, y_true * y_true, mode='valid') - mu2_sq
-    sigma12 = signal.fftconvolve(window, y_pred * y_true, mode='valid') - mu1_mu2
-    if cs_map:
-        return (((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) *
-                                                             (sigma1_sq + sigma2_sq + C2)),
-                (2.0 * sigma12 + C2) / (sigma1_sq + sigma2_sq + C2))
-    else:
-        return ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) *
-                                                            (sigma1_sq + sigma2_sq + C2))
+    mu1 = signal.fftconvolve(window, y_pred, mode='full')
+    mu2 = signal.fftconvolve(window, y_true, mode='full')
+    mu1_sq, mu2_sq, mu1_mu2 = mu1 * mu1, mu2 * mu2, mu1 * mu2
+
+    sigma1_sq = signal.fftconvolve(window, y_pred * y_pred, mode='full') - mu1_sq
+    sigma2_sq = signal.fftconvolve(window, y_true * y_true, mode='full') - mu2_sq
+    sigma12 = signal.fftconvolve(window, y_pred * y_true, mode='full') - mu1_mu2
+
+    maps = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) *
+                                                        (sigma1_sq + sigma2_sq + C2))
+    pad = int((size - 1)/2)
+    maps_pad = (maps[pad:maps.shape[0]-pad, pad:maps.shape[1]-pad])
+    return maps_pad
+
 
 
 def plot_multiple_ssim_maps(name_img, moment):
@@ -422,8 +450,9 @@ def plot_multiple_ssim_maps(name_img, moment):
             ax.set_title('Target image')
             plt.imshow(map, interpolation='nearest', cmap='viridis')
 
+
         else:
-            psnrs[key], ssims[key] = PSNR_focus(datas[i], y, name_image=name_img + '_' + key, save=True), SSIM_focus(
+            psnrs[key], ssims[key] = psnr_focus(y, datas[i], name_image=name_img + '_' + key, save=True), SSIM_focus(
                 datas[i], y,
                 name_img + '_' + key,
                 save=True)
