@@ -1,11 +1,10 @@
 from __future__ import print_function, unicode_literals, absolute_import, division
 from six.moves import range, zip, map, reduce, filter
 
-from ..utils import _raise, backend_channels_last, normalize_0_255, save_figure, vrange
+from ..utils import _raise, backend_channels_last, normalize_0_255, save_figure
 from ..utils.tf import keras_import
 from csbdeep.data import no_background_patches_zscore
 
-from sklearn.metrics import mean_squared_error
 from skimage.metrics import structural_similarity
 
 import matplotlib.pyplot as plt
@@ -13,9 +12,7 @@ from scipy import signal
 from tifffile import imread
 import tensorflow as tf
 import numpy as np
-import imutils
 import math
-import cv2
 
 K = keras_import('backend')
 
@@ -89,6 +86,7 @@ def loss_mse(mean=True):
 
 def loss_mse_focus(mean=True):
     R = _mean_or_not(mean)
+
     def mse_focus(y_true, y_pred):
         y_true_filter, y_pred_filter = loss_focus(y_true, y_pred)
         return R(K.square(y_pred_filter - y_true_filter))
@@ -96,6 +94,7 @@ def loss_mse_focus(mean=True):
 
 
 def loss_psnr():
+
     def psnr(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
@@ -105,6 +104,7 @@ def loss_psnr():
 
 
 def loss_psnr_focus():
+
     def psnr_focus(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
@@ -122,6 +122,7 @@ def loss_ssim():
 
 
 def loss_ssim_focus():
+
     def ssim_focus(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
@@ -154,6 +155,7 @@ def loss_psnr_ssim():
 
     return psnr_ssim
 
+
 def y_common_mask(y_true, y_pred):
     array_true = y_true.numpy().squeeze()
     array_pred = y_pred.numpy().squeeze()
@@ -164,6 +166,7 @@ def y_common_mask(y_true, y_pred):
 
     common_mask = np.logical_or(mask_true, mask_pred)
     return common_mask
+
 
 def bool_interesting(y):
     median_pred = np.median(y, axis=(1, 2))
@@ -176,15 +179,16 @@ def bool_interesting(y):
 
 
 def loss_focus(y_true, y_pred):
+
     batch_size = K.shape(y_true)[0]
     batch_size = batch_size.numpy()
     img_height = K.shape(y_true)[1]
     img_width = K.shape(y_true)[2]
     nb_pixels = img_height * img_width
-
     array_true_1d = y_true.numpy().squeeze().reshape(batch_size, nb_pixels)
     array_pred_1d = y_pred.numpy().squeeze().reshape(batch_size, nb_pixels)
 
+    # Common mask to focus on area of interest
     common_mask_arr = y_common_mask(y_true, y_pred)
     common_mask_arr = np.expand_dims(common_mask_arr, axis=3)
     common_mask_1d = np.reshape(common_mask_arr, [batch_size, nb_pixels])
@@ -215,12 +219,13 @@ def loss_focus(y_true, y_pred):
     idx_loc = [np.random.choice(np.arange(nb_zeros_per_batch[i]), size=nb_zero_to_replace[i], replace=False) for i in range(batch_size)]
     pixels_zero_to_change = [loc_zeros_per_batch[i][idx_loc[i]] for i in range(batch_size)]
 
+    # Put to 2 zeros pixels to change with a random positive pixel
     for i, idx in zip(np.arange(batch_size), pixels_zero_to_change):
         mask[i, idx] = 2
     mask = np.reshape(mask, [batch_size, nb_pixels, 1, 1])
     mask = tf.convert_to_tensor(mask)
 
-    ### Replace zeros by random pixels
+    # Select zeros indices to be replaced by random pixels
     # Position of zscore pixels
     pos_idx = [np.where(mask[i] == 1)[0] for i in range(batch_size)]
     # Number of positive pixels for each batch
@@ -232,14 +237,15 @@ def loss_focus(y_true, y_pred):
     rdm_pixels_true = array_true_1d[(rdm_idx_x, rdm_idx_y)].reshape(batch_size, nb_pixels, 1, 1)
     rdm_pixels_pred = array_pred_1d[(rdm_idx_x, rdm_idx_y)].reshape(batch_size, nb_pixels, 1, 1)
 
+    # Replace random pixels
     new_y_true = tf.where(mask == 2, rdm_pixels_true, new_y_true)
     new_y_pred = tf.where(mask == 2, rdm_pixels_pred, new_y_pred)
-
-    mask = tf.where(mask == 2, 1, mask)
-    mask = tf.reshape(mask, (batch_size, img_height, img_width, 1))
     new_y_true = tf.reshape(new_y_true, (batch_size, img_height, img_width, 1))
     new_y_pred = tf.reshape(new_y_pred, (batch_size, img_height, img_width, 1))
 
+    # Select only values of the mask
+    mask = tf.where(mask == 2, 1, mask)
+    mask = tf.reshape(mask, (batch_size, img_height, img_width, 1))
     idx_mask = tf.where(mask == 1)
     keep_true = tf.gather_nd(indices=idx_mask, params=new_y_true)
     keep_pred = tf.gather_nd(indices=idx_mask, params=new_y_pred)
@@ -261,7 +267,7 @@ def loss_focal(gamma=1, mean=True):
             p = p.astype('float32')
             maps.append(p)
         maps = tf.convert_to_tensor(maps)
-        maps = tf.where(maps<0, 0, maps)
+        maps = tf.where(maps < 0, 0, maps)
         maps = tf.reshape(maps, y_true.shape)
         weighted_term = (1 - maps) ** gamma
         return R(tf.math.multiply(K.abs(y_pred - y_true), weighted_term))
@@ -276,7 +282,7 @@ def loss_focal_mito(mean=True):
         y_pred_arr = y_pred.numpy().squeeze()
         y_true_mask = bool_interesting(y_true_arr)
 
-        gamma = tf.where(y_true_mask == True, 1, 2)
+        gamma = tf.where(y_true_mask==True, 1, 2)
         maps = []
 
         for batch_true, batch_pred in zip(y_true_arr, y_pred_arr):
@@ -294,6 +300,7 @@ def loss_focal_mito(mean=True):
 
 def loss_focal_cristae(gamma=1, mean=True):
     R = _mean_or_not(mean)
+
     def focal_cristae(y_true, y_pred):
         p = - loss_ssim()(y_true, y_pred)
         weighted_term = (1 - p) ** gamma
@@ -363,8 +370,6 @@ def ssim_focus(pred, target, name_image='', save=False):
 
 
 def fspecial_gauss(size, sigma):
-    """Function to mimic the 'fspecial' gaussian MATLAB function
-    """
     x, y = np.mgrid[-size // 2 + 1:size // 2 + 1, -size // 2 + 1:size // 2 + 1]
     g = np.exp(-((x ** 2 + y ** 2) / (2.0 * sigma ** 2)))
     return g / g.sum()
@@ -373,32 +378,15 @@ def fspecial_gauss(size, sigma):
 def ssim_maps(y_pred, y_true, focus=False):
     """Return the Structural Similarity Map corresponding to input images img1
     and img2 (images are assumed to be uint8)
-
-    This function attempts to mimic precisely the functionality of ssim.m a
-    MATLAB provided by the author's of SSIM
-    https://ece.uwaterloo.ca/~z70wang/research/ssim/ssim_index.m
     """
+
     y_pred = y_pred.astype(np.float32)
     y_true = y_true.astype(np.float32)
     y_pred, y_true = normalize_0_255([y_pred, y_true])
 
     if focus:
-        # Calculate area of interest for true
-        median_true = np.median(y_true)
-        std_true = np.std(y_true)
-        filtered_true = (y_true - median_true) / std_true
-        filtered_true = np.where(filtered_true < 0, 0.0, filtered_true)
-        mask_true = filtered_true > 1
-
-        # Calculate area of interest for pred
-        median_pred = np.median(y_pred)
-        std_pred = np.std(y_pred)
-        filtered_pred = (y_pred - median_pred) / std_pred
-        filtered_pred = np.where(filtered_pred < 0, 0, filtered_pred)
-        mask_pred = filtered_pred > 1
-
         # Calculate common area of interest
-        common_mask = np.logical_or(mask_true, mask_pred)
+        common_mask = y_common_mask(y_true, y_pred)
         y_pred = np.where(common_mask == False, y_true, y_pred)
 
     size, sigma, L = 11, 1.5, 255
@@ -450,9 +438,8 @@ def plot_multiple_ssim_maps(name_img, moment):
             ax.set_title('Target image')
             plt.imshow(map, interpolation='nearest', cmap='viridis')
 
-
         else:
-            psnrs[key], ssims[key] = psnr_focus(y, datas[i], name_image=name_img + '_' + key, save=True), SSIM_focus(
+            psnrs[key], ssims[key] = psnr_focus(y, datas[i], name_image=name_img + '_' + key, save=True), ssim_focus(
                 datas[i], y,
                 name_img + '_' + key,
                 save=True)

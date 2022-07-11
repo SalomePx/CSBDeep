@@ -19,7 +19,7 @@ from csbdeep.internals.losses import plot_multiple_ssim_maps
 from csbdeep.internals.predict import restore_and_eval_test, eval_metrics
 
 
-def launch(loss):
+def launch(loss, transforms, epochs, spe):
     from csbdeep.data.transform import flip_vertical, flip_90, flip_180, flip_270, zoom_aug
 
     # -----------------------------
@@ -108,8 +108,8 @@ def launch(loss):
         flip_270 = flip_270(axes)
         zoom_aug = zoom_aug(axes)
 
-        #transforms = [flip_vertical, flip_90, flip_180, flip_270]
-        transforms = None
+        if transforms is not None:
+            transforms = [flip_vertical, flip_90, flip_180, flip_270]
 
         if create_patches_with_care:
             X, Y, XY_axes = create_patches(
@@ -174,11 +174,11 @@ def launch(loss):
     # -------- Train the model --------
     # ---------------------------------
     if train:
-        config = Config(axes, n_channel_in, n_channel_out, train_loss=loss, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=5)
+        config = Config(axes, n_channel_in, n_channel_out, train_loss=loss, unet_kern_size=3, train_batch_size=8, train_steps_per_epoch=spe)
         vars(config)
         model = CARE(config, 'my_model', basedir=base_dir, name_weights='best')
         model.keras_model.summary()
-        history = model.train(X, Y, validation_data=(X_val, Y_val), epochs=1)
+        history = model.train(X, Y, validation_data=(X_val, Y_val), epochs=epochs)
 
         # Plot history
         plt.figure(figsize=(16, 5))
@@ -222,7 +222,6 @@ def launch(loss):
         plt.title('Prediction')
         plt.imshow(restored)
         plt.savefig("tests/sspred16.png", bbox_inches='tight')
-
         cv2.imwrite('tests/predssim16.tif', restored)
 
 
@@ -230,7 +229,7 @@ def launch(loss):
     # -------- Testings and predictions -----------
     # ---------------------------------------------
     if predicting:
-        psnrs, ssims, psnrs_focus, ssims_focus, _, _ = restore_and_eval_test(model, 'YX', data_dir, moment)
+        psnrs, ssims, psnrs_focus, ssims_focus, _, _, _, _ = restore_and_eval_test(model, 'YX', data_dir, moment)
 
 
     # -----------------------------------------------
@@ -288,10 +287,17 @@ def launch(loss):
         # SAVE model
         model.export_TF()
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-l", action='store', dest='loss', required=True)
+    parser.add_argument("-t", action='store', dest='tfm', type=str, default=None)
+    parser.add_argument("-e", action='store', dest='epochs', type=int, default=1)
+    parser.add_argument("-spe", action='store', dest='steps_per_epoch', type=int, default=5)
     args = parser.parse_args()
+
+    if True:
+        launch(args.loss, args.tfm, args.epochs, args.steps_per_epoch)
 
     # print std
     if False:
@@ -299,8 +305,7 @@ if __name__ == '__main__':
         x2 = (x - np.median(x)) / 3.7
         cv2.imwrite('todelete/imagetest5.png', x2)
 
-    if True:
-        launch(args.loss)
+
 
 
 

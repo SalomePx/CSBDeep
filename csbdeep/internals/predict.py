@@ -607,8 +607,9 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, patch_size=(128,1
         # restored = predict_per_patch(keras_model, x, axes, patch_size=patch_size, overlap=10)
 
         # Save SSIM maps
+        maps = ssim_maps(restored, y)
         plt.figure(figsize=(15, 6))
-        plt.imshow(map, interpolation='nearest', cmap='viridis')
+        plt.imshow(maps, interpolation='nearest', cmap='viridis')
         plt.colorbar()
         plt.savefig("fig/" + moment + "/ssim_maps/" + name_img + ".png", bbox_inches='tight')
 
@@ -625,10 +626,11 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, patch_size=(128,1
 
         # Calculate metrics
         y_norm, x_norm, restored_norm = normalize_0_255([y, x, restored])
-        psnr = round(psnr(restored_norm, y_norm), 2)
+        psnr_img = round(psnr(restored_norm, y_norm), 2)
         psnr_f = round(psnr_focus(y_norm, restored_norm), 2)
-        ssim = round(ssim(restored_norm, y_norm, data_range=255), 2)
+        ssim_img = round(ssim(restored_norm, y_norm, data_range=255), 2)
         ssim_f = round(ssim_focus(restored_norm, y_norm, ), 2)
+
         y_perc, x_perc, restored_perc = normalize_percentile([y, x, restored])
         mae = round(np.mean(np.abs(y_perc - restored_perc)), 2)
         mse = round(np.square(np.subtract(y_perc, restored_perc)).mean(), 6)
@@ -637,9 +639,9 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, patch_size=(128,1
         mse_f = round(np.square(np.subtract(y_true, y_pred)).mean(), 2)
 
         if verbose:
-            print(f"Prediction {name_img} - PSNR : {round(psnr, 2)} - PSNR focus: {round(psnr_f, 2)} - SSIM: {round(ssim, 2)} - SSIM focus: {round(ssim_f, 2)} - MAE: {round(mae, 2)}  - MAE focus: {round(mae_f, 2)}  - MSE: {round(mse, 2)} - MSE focus: {round(mse_f, 2)}")
+            print(f"Prediction {name_img} - PSNR : {round(psnr_img, 2)} - PSNR focus: {round(psnr_f, 2)} - SSIM: {round(ssim_img, 2)} - SSIM focus: {round(ssim_f, 2)} - MAE: {round(mae, 2)}  - MAE focus: {round(mae_f, 2)}  - MSE: {round(mse, 2)} - MSE focus: {round(mse_f, 2)}")
         psnrs.append(psnr)
-        ssims.append(ssim)
+        ssims.append(ssim_img)
         maes.append(mae)
         mses.append(mse)
         psnrs_focus.append(psnr_f)
@@ -671,12 +673,12 @@ def eval_metrics(datas, focus=False, img_name=''):
 
         if focus:
             snr = round(psnr_focus(y_norm, x_norm, name_image=img_name), 2)
-            ssim = round(ssim_focus(y_norm, x_norm, name_image=img_name), 2)
+            sim = round(ssim_focus(y_norm, x_norm, name_image=img_name), 2)
         else:
             snr = round(psnr(y_norm, x_norm), 2)
-            ssim = round(ssim(y_norm, x_norm), 2)
+            sim = round(ssim(y_norm, x_norm), 2)
 
         psnrs.append(snr)
-        ssims.append(ssim)
+        ssims.append(sim)
 
     return psnrs, ssims
