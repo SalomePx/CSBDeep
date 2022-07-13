@@ -4,14 +4,18 @@ from six.moves import range, zip, map, reduce, filter
 from six import string_types
 
 from itertools import chain
-import sys, os, warnings
+import sys, warnings
 
 from tqdm import tqdm
+import tensorflow as tf
 import numpy as np
 import shutil
 import math
 import cv2
 import os
+
+import torch.nn as nn
+import torch
 
 from ..utils import _raise, consume, compose, normalize_mi_ma, axes_dict, axes_check_and_normalize, choice, save_patch, \
     normalize, create_patch_dir, create_dir
@@ -68,7 +72,7 @@ def no_background_patches(threshold=0.4, percentile=99.9):
     return _filter
 
 
-def no_background_patches_zscore():
+def no_background_patches_zscore_old():
     # TODO : the definition : in construction
 
     """Returns a patch filter to be used by :func:`create_patches` to determine for each image pair which patches
@@ -97,6 +101,71 @@ def no_background_patches_zscore():
 
         # Make max filter patch_size smaller to avoid only few non-bg pixel close to image border
         filtered = (y - np.median(y)) / np.std(y)
+        filtered = np.where(filtered < 0, 0, filtered)
+        mask_filter = filtered > 1
+
+        if save:
+            cv2.imwrite("savings/filtered_images/" + image_name + ".tif", filtered)
+            zscore_img = np.where(mask_filter != 0, filtered, 0)
+            cv2.imwrite("savings/zscore_images/" + image_name + ".tif", zscore_img)
+
+        return mask_filter
+
+    return _filter
+
+
+def no_background_patches_zscore():
+    # TODO : the definition : in construction
+
+    """Returns a patch filter to be used by :func:`create_patches` to determine for each image pair which patches
+    are eligible for sampling. The purpose is to only sample patches from "interesting" regions of the raw image that
+    actually contain a substantial amount of non-background signal. To that end, a maximum filter is applied to the target image
+    to find the largest values in a region.
+
+    Returns
+    -------
+    function
+        Function that takes an image pair `(y,x)` and the patch size as arguments and
+        returns a binary mask of the same size as the image (to denote the locations
+        eligible for sampling for :func:`create_patches`). At least one pixel of the
+        binary mask must be ``True``, otherwise there are no patches to sample.
+
+    Raises
+    ------
+    ValueError
+        Illegal arguments.
+    """
+    def residual(y):
+        down = y[1:, :-1]
+        right = y[:-1, 1:]
+        res = (2 * y[:-1,:-1] - down - right) / math.sqrt(6)
+        return res
+
+    def anscombe_tfm(y):
+        y = np.where(y<0, 0, y)
+        tfm = 2 * np.sqrt(3/8 + y)
+        return tfm
+
+    def mad(y):
+        y = np.abs(y)
+        m = np.median(y)
+        sigma = 1.4826 * m
+        return sigma
+
+    def std_approx(y, poisson=True):
+        if poisson:
+            y = anscombe_tfm(y)
+        res = residual(y)
+        std = mad(res)
+        return std
+
+
+    def _filter(y, image_name='', dtype=np.float32, save=True):
+        if dtype is not None:
+            y = y.astype(dtype)
+
+        # Make max filter patch_size smaller to avoid only few non-bg pixel close to image border
+        filtered = (y - np.median(y)) / std_approx(y)
         filtered = np.where(filtered < 0, 0, filtered)
         mask_filter = filtered > 1
 
@@ -640,6 +709,47 @@ def cut_patches_in_image(datas, patch_size, image_name='', delete_black_patches=
             nb_patch += 1
 
     return np.array(patches_y), np.array(patches_x)
+
+
+def split_tensor(image, tile_size=128, overlap=20):
+    image = image.numpy()
+    tensor = torch.from_numpy(image)
+    tensor = tensor.permute(3, 0, 1, 2)
+    mask = torch.ones_like(tensor)
+    stride = tile_size - overlap
+    unfold = nn.Unfold(kernel_size=(tile_size, tile_size), stride=stride)
+    mask_p = unfold(mask)
+    patches = unfold(tensor)
+
+    patches = patches.reshape(3, tile_size, tile_size, -1).permute(3, 0, 1, 2)
+    if tensor.is_cuda:
+        patches_base = torch.zeros(patches.size(), device=tensor.get_device())
+    else:
+        patches_base = torch.zeros(patches.size())
+
+    tiles = []
+    for t in range(patches.size(0)):
+        tiles.append(patches[[t], :, :, :])
+    return tiles, mask_p, patches_base, (tensor.size(2), tensor.size(3))
+
+
+def rebuild_tensor(tensor_list, mask_t, base_tensor, t_size, tile_size=128, overlap=20):
+    stride = tile_size - overlap
+
+    for t, tile in enumerate(tensor_list):
+        print(tile.size())
+        base_tensor[[t], :, :] = tile
+
+    base_tensor = base_tensor.permute(1, 2, 3, 0).reshape(3 * tile_size * tile_size, base_tensor.size(0)).unsqueeze(0)
+    fold = nn.Fold(output_size=(t_size[0], t_size[1]), kernel_size=(tile_size, tile_size), stride=stride)
+    output_tensor = fold(base_tensor) / fold(mask_t)
+
+    output_tensor = output_tensor.permute(1, 2, 3, 0)
+    output_array = output_tensor.numpy()
+    output_tensor = tf.convert_to_tensor(output_array)
+
+    return output_tensor
+
 
 
 def create_patches_mito(

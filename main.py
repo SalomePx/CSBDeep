@@ -66,7 +66,7 @@ def launch(loss, transforms, epochs, spe):
     # -----------------------------------------------------
     # -------- Analysis with our patches method -----------
     # -----------------------------------------------------
-    if not initial_care:
+    if not initial_care and not load:
 
         if build_data:
             # Extract zip file
@@ -140,7 +140,7 @@ def launch(loss, transforms, epochs, spe):
     # ----------------------------------------------------
     # -------- Analysis with CARE patch method -----------
     # ----------------------------------------------------
-    else:
+    elif initial_care:
         # Download and extract zip file
         download_and_extract_zip_file(
             url       = 'http://csbdeep.bioimagecomputing.com/example_data/snr_7_binning_2.zip',
@@ -191,7 +191,7 @@ def launch(loss, transforms, epochs, spe):
     # -------- Load the model --------
     # --------------------------------
     elif load:
-        model = CARE(config=None, name='my_model', basedir='archives/finalTable/ssim_focus', name_weights='weights_best.h5')
+        model = CARE(config=None, name='my_model', basedir='archives/finalTable/'+loss, name_weights='weights_best.h5')
         model.keras_model.summary()
 
 
@@ -209,8 +209,12 @@ def launch(loss, transforms, epochs, spe):
         history = model_trf.train(X, Y, validation_data=(X_val, Y_val), epochs=100, steps_per_epoch=50)
         model = model_trf
 
+
+    # --------------------------------------
+    # -------- Predict one image -----------
+    # --------------------------------------
     if predict_one_img:
-        x = imread('tests/cell16.tif')
+        x = imread('tests/cell15.tif')
         restored = model.predict(x, axes= 'YX')
 
         # Plot GT, prediction and SSIM maps
@@ -221,8 +225,8 @@ def launch(loss, transforms, epochs, spe):
         plt.subplot(1, 2, 2)
         plt.title('Prediction')
         plt.imshow(restored)
-        plt.savefig("tests/sspred16.png", bbox_inches='tight')
-        cv2.imwrite('tests/predssim16.tif', restored)
+        plt.savefig("tests/pred15.png", bbox_inches='tight')
+        cv2.imwrite('tests/predssim15.tif', restored)
 
 
     # ---------------------------------------------

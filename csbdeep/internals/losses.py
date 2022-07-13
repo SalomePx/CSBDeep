@@ -76,11 +76,13 @@ def loss_mse(mean=True):
         def mse(y_true, y_pred):
             n = K.shape(y_true)[-1]
             return R(K.square(y_pred[..., :n] - y_true))
+
         return mse
     else:
         def mse(y_true, y_pred):
             n = K.shape(y_true)[1]
             return R(K.square(y_pred[:, :n, ...] - y_true))
+
         return mse
 
 
@@ -90,11 +92,11 @@ def loss_mse_focus(mean=True):
     def mse_focus(y_true, y_pred):
         y_true_filter, y_pred_filter = loss_focus(y_true, y_pred)
         return R(K.square(y_pred_filter - y_true_filter))
+
     return mse_focus
 
 
 def loss_psnr():
-
     def psnr(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
@@ -104,12 +106,12 @@ def loss_psnr():
 
 
 def loss_psnr_focus():
-
     def psnr_focus(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
         mask_true, mask_pred = loss_focus(y_true_norm, y_pred_norm)
         return - tf.reduce_mean(tf.image.psnr(mask_true, mask_pred, 255))
+
     return psnr_focus
 
 
@@ -118,16 +120,17 @@ def loss_ssim():
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
         return - tf.reduce_mean(tf.image.ssim(y_true_norm, y_pred_norm, 255))
+
     return ssim
 
 
 def loss_ssim_focus():
-
     def ssim_focus(y_true, y_pred):
         y_true_norm = y_true * 255.0 / tf.keras.backend.max(y_true)
         y_pred_norm = y_pred * 255.0 / tf.keras.backend.max(y_pred)
         mask_true, mask_pred = loss_focus(y_true_norm, y_pred_norm)
         return - tf.reduce_mean(tf.image.ssim(mask_true, mask_pred, 255))
+
     return ssim_focus
 
 
@@ -136,6 +139,7 @@ def loss_mae_ssim():
         val_ssim = - loss_ssim_focus()(y_true, y_pred)
         val_mae = - loss_mae_focus()(y_true, y_pred)
         return -(0.5 * val_ssim + 0.5 * val_mae)
+
     return mae_ssim
 
 
@@ -144,6 +148,7 @@ def loss_mae_psnr():
         val_psnr = - loss_psnr_focus()(y_true, y_pred)
         val_mae = - loss_mae_focus()(y_true, y_pred)
         return -(0.5 * val_psnr + 0.5 * val_mae)
+
     return mae_psnr
 
 
@@ -179,7 +184,6 @@ def bool_interesting(y):
 
 
 def loss_focus(y_true, y_pred):
-
     batch_size = K.shape(y_true)[0]
     batch_size = batch_size.numpy()
     img_height = K.shape(y_true)[1]
@@ -216,7 +220,8 @@ def loss_focus(y_true, y_pred):
 
     # Choose randomly zeros to save for each batch
     mask = np.where(common_mask_arr.reshape(batch_size, nb_pixels), 1, 0)
-    idx_loc = [np.random.choice(np.arange(nb_zeros_per_batch[i]), size=nb_zero_to_replace[i], replace=False) for i in range(batch_size)]
+    idx_loc = [np.random.choice(np.arange(nb_zeros_per_batch[i]), size=nb_zero_to_replace[i], replace=False) for i in
+               range(batch_size)]
     pixels_zero_to_change = [loc_zeros_per_batch[i][idx_loc[i]] for i in range(batch_size)]
 
     # Put to 2 zeros pixels to change with a random positive pixel
@@ -232,7 +237,8 @@ def loss_focus(y_true, y_pred):
     nb_idx = [np.arange(len(pos_idx[i])) for i in range(batch_size)]
     # Selection of random indices
     rdm_idx = [np.random.choice(nb_idx[i], size=nb_pixels) for i in range(batch_size)]
-    rdm_idx_y = np.array([np.array(pos_idx[i][rdm_idx[i]]) for i in range(batch_size)]).reshape(batch_size * nb_pixels,)
+    rdm_idx_y = np.array([np.array(pos_idx[i][rdm_idx[i]]) for i in range(batch_size)]).reshape(
+        batch_size * nb_pixels, )
     rdm_idx_x = np.repeat(np.arange(batch_size), nb_pixels)
     rdm_pixels_true = array_true_1d[(rdm_idx_x, rdm_idx_y)].reshape(batch_size, nb_pixels, 1, 1)
     rdm_pixels_pred = array_pred_1d[(rdm_idx_x, rdm_idx_y)].reshape(batch_size, nb_pixels, 1, 1)
@@ -262,7 +268,7 @@ def loss_focal(gamma=1, mean=True):
         y_true_arr = y_true.numpy().squeeze()
         y_pred_arr = y_pred.numpy().squeeze()
         maps = []
-        for batch_true, batch_pred in zip(y_true_arr,y_pred_arr):
+        for batch_true, batch_pred in zip(y_true_arr, y_pred_arr):
             p = ssim_maps(batch_true, batch_pred)
             p = p.astype('float32')
             maps.append(p)
@@ -271,6 +277,7 @@ def loss_focal(gamma=1, mean=True):
         maps = tf.reshape(maps, y_true.shape)
         weighted_term = (1 - maps) ** gamma
         return R(tf.math.multiply(K.abs(y_pred - y_true), weighted_term))
+
     return focal
 
 
@@ -282,7 +289,8 @@ def loss_focal_mito(mean=True):
         y_pred_arr = y_pred.numpy().squeeze()
         y_true_mask = bool_interesting(y_true_arr)
 
-        gamma = tf.where(y_true_mask==True, 1, 2)
+        gamma = tf.where(y_true_mask==True, 0.0, 1.0)
+        gamma = tf.reshape(gamma, y_true.shape)
         maps = []
 
         for batch_true, batch_pred in zip(y_true_arr, y_pred_arr):
@@ -291,10 +299,11 @@ def loss_focal_mito(mean=True):
             maps.append(p)
 
         maps = tf.convert_to_tensor(maps)
-        maps = tf.where(maps<0, 0, maps)
+        maps = tf.where(maps < 0, 0, maps)
         maps = tf.reshape(maps, y_true.shape)
         weighted_term = tf.math.pow((1 - maps), gamma)
         return R(tf.math.multiply(K.abs(y_pred - y_true), weighted_term))
+
     return focal_mito
 
 
@@ -305,6 +314,7 @@ def loss_focal_cristae(gamma=1, mean=True):
         p = - loss_ssim()(y_true, y_pred)
         weighted_term = (1 - p) ** gamma
         return R(K.abs(y_pred - y_true) * weighted_term)
+
     return focal_cristae
 
 
@@ -404,10 +414,9 @@ def ssim_maps(y_pred, y_true, focus=False):
 
     maps = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / ((mu1_sq + mu2_sq + C1) *
                                                         (sigma1_sq + sigma2_sq + C2))
-    pad = int((size - 1)/2)
-    maps_pad = (maps[pad:maps.shape[0]-pad, pad:maps.shape[1]-pad])
+    pad = int((size - 1) / 2)
+    maps_pad = (maps[pad:maps.shape[0] - pad, pad:maps.shape[1] - pad])
     return maps_pad
-
 
 
 def plot_multiple_ssim_maps(name_img, moment):

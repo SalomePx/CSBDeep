@@ -54,5 +54,4 @@ def create_noised_inputs(data_path, gaussian_blur, gaussian_sigma, poisson_noise
                 img_noised = np.maximum(0, img_noised + noise)
             if poisson_noise:
                 img_noised = np.random.poisson(np.maximum(0, img_noised).astype(np.int)).astype(np.float32)
-
             cv2.imwrite(img_noised_path, img_noised)

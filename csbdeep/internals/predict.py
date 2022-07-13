@@ -3,7 +3,7 @@ from six.moves import range, zip, map, reduce, filter
 
 from ..utils import _raise, move_channel_for_backend, backend_channels_last, axes_check_and_normalize, axes_dict, create_dir, normalize_0_255, plot_some, save_figure
 from csbdeep.internals.losses import psnr, ssim_maps, ssim_focus, psnr_focus, area_of_interest
-from ..data.generate import cut_patches_in_image
+from ..data.generate import cut_patches_in_image, split_tensor, rebuild_tensor
 from ..data.prepare import normalize_percentile
 
 
@@ -52,7 +52,31 @@ def predict_direct(keras_model, x, axes_in, axes_out=None, **kwargs):
     return pred
 
 
+
 def predict_per_patch(keras_model, x, axes_in, axes_out=None, patch_size=(128, 128), overlap=0, **kwargs):
+    if axes_out is None:
+        axes_out = axes_in
+
+    ax_in, ax_out = axes_dict(axes_in), axes_dict(axes_out)
+    channel_in, channel_out = 2, 2
+    single_sample = ax_in['S'] is None
+    len(axes_in) == x.ndim or _raise(ValueError())
+
+    tiles, mask_p, patches_base, t_size = split_tensor(x, patch_size[0], overlap)
+    tiles = tiles.permute(1, 2, 3, 0)
+    tensor_list_pred = []
+
+    for t, tile in enumerate(tiles):
+        #tensor_patch = to_tensor(tile, single_sample=single_sample)
+        pred = from_tensor(keras_model.keras_model.predict(tile, **kwargs), channel=channel_out, single_sample=single_sample)
+        tensor_list_pred.append(pred)
+
+    restored = rebuild_tensor(tensor_list_pred, mask_p, patches_base, t_size, patch_size[0], overlap)
+    return restored
+
+
+
+def predict_per_patch_old(keras_model, x, axes_in, axes_out=None, patch_size=(128, 128), overlap=0, **kwargs):
     if axes_out is None:
         axes_out = axes_in
 
@@ -69,11 +93,6 @@ def predict_per_patch(keras_model, x, axes_in, axes_out=None, patch_size=(128, 1
     n_width_old = math.ceil(x.shape[1] / patch_size[1])
     new_shape_y = x.shape[1] + (n_width_old - 1) * overlap
     n_width = math.ceil(new_shape_y / patch_size[0])
-
-    print("n_width_old : ", n_width_old)
-    print("n_width : ", n_width)
-    print("n_height_old : ", n_height_old)
-    print("n_height : ", n_height)
 
     overlap_x, overlap_y = n_height * patch_size[0] - (n_height -1) * overlap - x.shape[0], n_width * patch_size[1] - (n_width - 1) * overlap - x.shape[1]
 
@@ -145,8 +164,6 @@ def predict_per_patch(keras_model, x, axes_in, axes_out=None, patch_size=(128, 1
             patch_left = all_pred[row][col-1][:, patch_size[1]-overlap_y:]
             final_pred[begin_pad_height:end_pad_height, begin_pad_width:end_pad_width] = (patch_left + pred[:,:overlap_y]) / 2
             final_pred[begin_pad_height:end_pad_height, end_pad_width:] = pred[:, overlap_y:]
-
-
 
         elif row==0:
             begin_pad_height, end_pad_height = 0, patch_size[0] - overlap
@@ -586,7 +603,6 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, patch_size=(128,1
     dir_pred = 'fig/' + moment + '/predict/'
     create_dir(dir_pred)
     images_test = sorted(os.listdir(data_dir + '/test/low'))
-    create_dir('fig/' + moment + '/compare_maps')
     create_dir('fig/' + moment + '/ssim_maps')
 
     psnrs, psnrs_focus = [], []
@@ -640,14 +656,14 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, patch_size=(128,1
 
         if verbose:
             print(f"Prediction {name_img} - PSNR : {round(psnr_img, 2)} - PSNR focus: {round(psnr_f, 2)} - SSIM: {round(ssim_img, 2)} - SSIM focus: {round(ssim_f, 2)} - MAE: {round(mae, 2)}  - MAE focus: {round(mae_f, 2)}  - MSE: {round(mse, 2)} - MSE focus: {round(mse_f, 2)}")
-        psnrs.append(psnr)
+        psnrs.append(psnr_img)
         ssims.append(ssim_img)
-        maes.append(mae)
-        mses.append(mse)
         psnrs_focus.append(psnr_f)
         ssims_focus.append(ssim_f)
         mses_focus.append(mse_f)
         maes_focus.append(mae_f)
+        maes.append(mae)
+        mses.append(mse)
 
     if verbose:
         print(f"Mean of testing predictions: PSNR: {round(np.mean(psnrs), 2)} - PSNR focus : {round(np.mean(psnrs_focus),2)} SSIM: {round(np.mean(ssims), 2)} - SSIM focus : {round(np.mean(ssims_focus),2)} - MAE: {round(np.mean(maes), 2)} - MAE focus: {round(np.mean(maes_focus), 2)}  - MSE: {round(np.mean(mses), 2)} - MSE focus: {round(np.mean(mses_focus), 2)} ")

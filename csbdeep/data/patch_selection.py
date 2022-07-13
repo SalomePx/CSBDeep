@@ -1,9 +1,8 @@
 from __future__ import print_function, unicode_literals, absolute_import, division
 
 import numpy as np
-import shutil
-from PIL import Image
 import cv2
+
 
 def patch_is_valid_care(patches, image_name, nb_patch):
     """ Check whether a patch is relevant, contains enough info, or is only background
