@@ -2,7 +2,6 @@ from __future__ import print_function, unicode_literals, absolute_import, divisi
 
 import matplotlib.pyplot as plt
 from tifffile import imread
-import tensorflow as tf
 import numpy as np
 import argparse
 import datetime
@@ -50,8 +49,8 @@ def launch(loss, transforms, epochs, spe):
     predict_one_img = False
     multiple_maps = False
     fine_tuning = False
-    train = True
-    load = False
+    train = False
+    load = True
 
 
     # ----------------------------------
@@ -66,7 +65,7 @@ def launch(loss, transforms, epochs, spe):
     # -----------------------------------------------------
     # -------- Analysis with our patches method -----------
     # -----------------------------------------------------
-    if not initial_care and not load:
+    if not initial_care:
 
         if build_data:
             # Extract zip file
@@ -108,7 +107,7 @@ def launch(loss, transforms, epochs, spe):
         flip_270 = flip_270(axes)
         zoom_aug = zoom_aug(axes)
 
-        if transforms is not None:
+        if transforms:
             transforms = [flip_vertical, flip_90, flip_180, flip_270]
 
         if create_patches_with_care:
@@ -295,9 +294,10 @@ def launch(loss, transforms, epochs, spe):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("-l", action='store', dest='loss', required=True)
-    parser.add_argument("-t", action='store', dest='tfm', type=str, default=None)
+    parser.add_argument("-t", action='store', dest='tfm', type=bool, default=False)
     parser.add_argument("-e", action='store', dest='epochs', type=int, default=1)
     parser.add_argument("-spe", action='store', dest='steps_per_epoch', type=int, default=5)
+    parser.add_argument("-f", action='store', dest='focus', type=bool, default=False)
     args = parser.parse_args()
 
     if True:

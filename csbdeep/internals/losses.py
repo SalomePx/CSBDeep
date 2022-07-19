@@ -4,6 +4,7 @@ from six.moves import range, zip, map, reduce, filter
 from ..utils import _raise, backend_channels_last, normalize_0_255, save_figure
 from ..utils.tf import keras_import
 from csbdeep.data import no_background_patches_zscore
+import sys
 
 from skimage.metrics import structural_similarity
 
@@ -265,6 +266,10 @@ def loss_focal(gamma=1, mean=True):
     R = _mean_or_not(mean)
 
     def focal(y_true, y_pred):
+        idx = sys.argv.index('-f')
+        focus = bool(sys.argv[idx+1])
+        if focus:
+            y_true, y_pred = loss_focus(y_true, y_pred)
         y_true_arr = y_true.numpy().squeeze()
         y_pred_arr = y_pred.numpy().squeeze()
         maps = []
@@ -285,6 +290,9 @@ def loss_focal_mito(mean=True):
     R = _mean_or_not(mean)
 
     def focal_mito(y_true, y_pred):
+        focus = args.focus
+        if focus:
+            y_true, y_pred = loss_focus(y_true, y_pred)
         y_true_arr = y_true.numpy().squeeze()
         y_pred_arr = y_pred.numpy().squeeze()
         y_true_mask = bool_interesting(y_true_arr)

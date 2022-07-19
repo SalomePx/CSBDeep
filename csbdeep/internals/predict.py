@@ -6,13 +6,14 @@ from csbdeep.internals.losses import psnr, ssim_maps, ssim_focus, psnr_focus, ar
 from ..data.generate import cut_patches_in_image, split_tensor, rebuild_tensor
 from ..data.prepare import normalize_percentile
 
-
 from skimage.metrics import structural_similarity as ssim
 import matplotlib.pyplot as plt
 from tifffile import imread
+import tensorflow as tf
 from tqdm import tqdm
 import numpy as np
 import warnings
+import torch
 import math
 import cv2
 import os
@@ -52,6 +53,23 @@ def predict_direct(keras_model, x, axes_in, axes_out=None, **kwargs):
     return pred
 
 
+def extract_patches(x, kernel_size, stride):
+    return tf.image.extract_patches(
+        x,
+        kernel_size,
+        stride,
+        rates=[1, 1, 1, 1],
+        padding="SAME"
+    )
+
+
+
+def extract_patches_inverse(x, y, tape, kernel_size, stride):
+    _x = tf.zeros_like(x)
+    _y = extract_patches(_x, kernel_size, stride)
+    grad = tape.gradient(_y, _x)
+    return tape.gradient(_y, _x, output_gradients=y) / grad
+
 
 def predict_per_patch(keras_model, x, axes_in, axes_out=None, patch_size=(128, 128), overlap=0, **kwargs):
     if axes_out is None:
@@ -62,18 +80,18 @@ def predict_per_patch(keras_model, x, axes_in, axes_out=None, patch_size=(128, 1
     single_sample = ax_in['S'] is None
     len(axes_in) == x.ndim or _raise(ValueError())
 
-    tiles, mask_p, patches_base, t_size = split_tensor(x, patch_size[0], overlap)
-    tiles = tiles.permute(1, 2, 3, 0)
-    tensor_list_pred = []
+    x_tensor = tf.convert_to_tensor(x)
+    x_tensor = tf.reshape(x_tensor, (1, x.shape[0], x.shape[1], 1))
+    stride = [1, patch_size[0] - overlap, patch_size[1] - overlap, 1]
+    tile_size = [1, patch_size[0], patch_size[1], 1]
 
-    for t, tile in enumerate(tiles):
-        #tensor_patch = to_tensor(tile, single_sample=single_sample)
-        pred = from_tensor(keras_model.keras_model.predict(tile, **kwargs), channel=channel_out, single_sample=single_sample)
-        tensor_list_pred.append(pred)
+    with tf.GradientTape(persistent=True) as tape:
+        tape.watch(x_tensor)
+        patches = extract_patches(x_tensor, kernel_size=tile_size, stride=stride)
+        image_reconstructed = extract_patches_inverse(x_tensor, patches, tape, kernel_size=tile_size, stride=stride)
 
-    restored = rebuild_tensor(tensor_list_pred, mask_p, patches_base, t_size, patch_size[0], overlap)
-    return restored
-
+    reconstructed = image_reconstructed.numpy().squeeze().squeeze()
+    return reconstructed
 
 
 def predict_per_patch_old(keras_model, x, axes_in, axes_out=None, patch_size=(128, 128), overlap=0, **kwargs):
@@ -619,8 +637,8 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, patch_size=(128,1
         name_img = img.split('.')[0]
         x = imread(data_dir + '/test/low/' + img)
         y = imread(data_dir + '/test/GT/' + img)
-        restored = keras_model.predict(x, axes)
-        # restored = predict_per_patch(keras_model, x, axes, patch_size=patch_size, overlap=10)
+        #restored = keras_model.predict(x, axes)
+        restored = predict_per_patch(keras_model, x, axes, patch_size=patch_size, overlap=10)
 
         # Save SSIM maps
         maps = ssim_maps(restored, y)

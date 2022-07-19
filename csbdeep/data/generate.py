@@ -712,7 +712,8 @@ def cut_patches_in_image(datas, patch_size, image_name='', delete_black_patches=
 
 
 def split_tensor(image, tile_size=128, overlap=20):
-    image = image.numpy()
+    image = np.expand_dims(image, 0)
+    image = np.expand_dims(image, image.ndim)
     tensor = torch.from_numpy(image)
     tensor = tensor.permute(3, 0, 1, 2)
     mask = torch.ones_like(tensor)
@@ -721,7 +722,7 @@ def split_tensor(image, tile_size=128, overlap=20):
     mask_p = unfold(mask)
     patches = unfold(tensor)
 
-    patches = patches.reshape(3, tile_size, tile_size, -1).permute(3, 0, 1, 2)
+    patches = patches.reshape(1, tile_size, tile_size, -1).permute(3, 0, 1, 2)
     if tensor.is_cuda:
         patches_base = torch.zeros(patches.size(), device=tensor.get_device())
     else:
@@ -735,20 +736,18 @@ def split_tensor(image, tile_size=128, overlap=20):
 
 def rebuild_tensor(tensor_list, mask_t, base_tensor, t_size, tile_size=128, overlap=20):
     stride = tile_size - overlap
-
     for t, tile in enumerate(tensor_list):
-        print(tile.size())
         base_tensor[[t], :, :] = tile
 
-    base_tensor = base_tensor.permute(1, 2, 3, 0).reshape(3 * tile_size * tile_size, base_tensor.size(0)).unsqueeze(0)
+    base_tensor = base_tensor.permute(1, 2, 3, 0).reshape(1 * tile_size * tile_size, base_tensor.size(0))
     fold = nn.Fold(output_size=(t_size[0], t_size[1]), kernel_size=(tile_size, tile_size), stride=stride)
     output_tensor = fold(base_tensor) / fold(mask_t)
 
     output_tensor = output_tensor.permute(1, 2, 3, 0)
     output_array = output_tensor.numpy()
     output_tensor = tf.convert_to_tensor(output_array)
-
-    return output_tensor
+    output = output_tensor.numpy().squeeze().squeeze()
+    return output
 
 
 
@@ -815,7 +814,7 @@ def create_patches_mito(
     """
 
     # Images and transforms
-    if transforms is None:
+    if not transforms:
         transforms = []
     transforms = list(transforms)
     if patch_axes is not None:
