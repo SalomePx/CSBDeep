@@ -1,5 +1,7 @@
 from __future__ import print_function, unicode_literals, absolute_import, division
 
+import os
+
 import matplotlib.pyplot as plt
 from tifffile import imread
 import numpy as np
@@ -18,7 +20,7 @@ from csbdeep.internals.losses import plot_multiple_ssim_maps
 from csbdeep.internals.predict import restore_and_eval_test, eval_metrics
 
 
-def launch(loss, transforms, epochs, spe):
+def launch(load, loss, transforms, epochs, spe):
     from csbdeep.data.transform import flip_vertical, flip_90, flip_180, flip_270, zoom_aug
 
     # -----------------------------
@@ -47,11 +49,10 @@ def launch(loss, transforms, epochs, spe):
 
     # Goal
     predict_one_img = False
+    all_models = False
     multiple_maps = False
     fine_tuning = False
-    train = False
-    load = True
-
+    train = not load
 
     # ----------------------------------
     # -------- Plot SSIM maps ----------
@@ -191,7 +192,6 @@ def launch(loss, transforms, epochs, spe):
     # --------------------------------
     elif load:
         model = CARE(config=None, name='my_model', basedir='archives/finalTable/'+loss, name_weights='weights_best.h5')
-        model.keras_model.summary()
 
 
     # ---------------------------------
@@ -213,19 +213,26 @@ def launch(loss, transforms, epochs, spe):
     # -------- Predict one image -----------
     # --------------------------------------
     if predict_one_img:
-        x = imread('tests/cell15.tif')
-        restored = model.predict(x, axes= 'YX')
+        x = imread('tests/IMG0027.STED.ome.tif')
+        if all_models:
+            losses = os.listdir('archives/finalTable')
+        else:
+            losses = [loss]
+        for loss in losses:
+            model = CARE(config=None, name='my_model', basedir='archives/finalTable/' + loss, name_weights='weights_best.h5')
+            restored = model.predict(x, axes= 'YX')
 
-        # Plot GT, prediction and SSIM maps
-        plt.figure(figsize=(15, 10))
-        plt.subplot(1, 2, 1)
-        plt.title('Original')
-        plt.imshow(x)
-        plt.subplot(1, 2, 2)
-        plt.title('Prediction')
-        plt.imshow(restored)
-        plt.savefig("tests/pred15.png", bbox_inches='tight')
-        cv2.imwrite('tests/predssim15.tif', restored)
+            # Plot GT, prediction and SSIM maps
+            '''
+            plt.figure(figsize=(15, 10))
+            plt.subplot(1, 2, 1)
+            plt.title('Original')
+            plt.imshow(x)
+            plt.subplot(1, 2, 2)
+            plt.title('Prediction')
+            plt.imshow(restored)
+            plt.savefig("tests/IMG0027_" + loss +".png", bbox_inches='tight')'''
+            cv2.imwrite("tests/IMG0027_" + loss + ".tif", restored)
 
 
     # ---------------------------------------------
@@ -293,6 +300,7 @@ def launch(loss, transforms, epochs, spe):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument("-load", action='store', dest='load', type=bool, default=False)
     parser.add_argument("-l", action='store', dest='loss', required=True)
     parser.add_argument("-t", action='store', dest='tfm', type=bool, default=False)
     parser.add_argument("-e", action='store', dest='epochs', type=int, default=1)
@@ -301,7 +309,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if True:
-        launch(args.loss, args.tfm, args.epochs, args.steps_per_epoch)
+        launch(args.load, args.loss, args.tfm, args.epochs, args.steps_per_epoch)
 
     # print std
     if False:

@@ -290,7 +290,11 @@ def loss_focal_mito(mean=True):
     R = _mean_or_not(mean)
 
     def focal_mito(y_true, y_pred):
-        focus = args.focus
+        try:
+            idx = sys.argv.index('-f')
+            focus = bool(sys.argv[idx + 1])
+        except:
+            focus=False
         if focus:
             y_true, y_pred = loss_focus(y_true, y_pred)
         y_true_arr = y_true.numpy().squeeze()

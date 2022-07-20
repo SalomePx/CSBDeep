@@ -88,8 +88,16 @@ def predict_per_patch(keras_model, x, axes_in, axes_out=None, patch_size=(128, 1
     with tf.GradientTape(persistent=True) as tape:
         tape.watch(x_tensor)
         patches = extract_patches(x_tensor, kernel_size=tile_size, stride=stride)
-        image_reconstructed = extract_patches_inverse(x_tensor, patches, tape, kernel_size=tile_size, stride=stride)
-
+        patches_pred = np.zeros(patches.shape)
+        for i in range(patches.shape[1]):
+            for j in range(patches.shape[2]):
+                patch = patches[0, i, j]
+                patch = tf.reshape(patch, [1, patch_size[0], patch_size[1], 1])
+                pred = keras_model.keras_model(patch)
+                patches_pred[0, i, j] = tf.reshape(pred, (patch_size[0] * patch_size[1]))
+        patches_pred = patches_pred.astype('float32')
+        patches_pred = tf.convert_to_tensor(patches_pred)
+        image_reconstructed = extract_patches_inverse(x_tensor, patches_pred, tape, kernel_size=tile_size, stride=stride)
     reconstructed = image_reconstructed.numpy().squeeze().squeeze()
     return reconstructed
 
