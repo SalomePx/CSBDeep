@@ -6,6 +6,7 @@ from six import string_types
 from itertools import chain
 import sys, warnings
 
+from PIL import Image
 from tqdm import tqdm
 import tensorflow as tf
 import numpy as np
@@ -1037,3 +1038,7 @@ def create_test_patches(raw_data, save_dir, channel=2):
     shutil.rmtree(save_dir + '/low')
     os.rename(save_dir + '/GT2', save_dir + '/GT')
     os.rename(save_dir + '/low2', save_dir + '/low')
+
+def get_mask(data_dir, name_img):
+    array = Image.open(data_dir + '_mask/'+ name_img + '.STED_Mask.png')
+    return array

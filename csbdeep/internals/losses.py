@@ -3,7 +3,7 @@ from six.moves import range, zip, map, reduce, filter
 
 from ..utils import _raise, backend_channels_last, normalize_0_255, save_figure
 from ..utils.tf import keras_import
-from csbdeep.data import no_background_patches_zscore
+from csbdeep.data import no_background_patches_zscore, get_mask
 import sys
 
 from skimage.metrics import structural_similarity
@@ -294,7 +294,7 @@ def loss_focal_mito(mean=True):
             idx = sys.argv.index('-f')
             focus = bool(sys.argv[idx + 1])
         except:
-            focus=False
+            focus = False
         if focus:
             y_true, y_pred = loss_focus(y_true, y_pred)
         y_true_arr = y_true.numpy().squeeze()
@@ -319,13 +319,39 @@ def loss_focal_mito(mean=True):
     return focal_mito
 
 
-def loss_focal_cristae(gamma=1, mean=True):
+def loss_focal_cristae(gamma=[0, 1, 2], mean=True):
     R = _mean_or_not(mean)
 
     def focal_cristae(y_true, y_pred):
-        p = - loss_ssim()(y_true, y_pred)
-        weighted_term = (1 - p) ** gamma
-        return R(K.abs(y_pred - y_true) * weighted_term)
+        try:
+            idx = sys.argv.index('-f')
+            focus = bool(sys.argv[idx + 1])
+        except:
+            focus = False
+        if focus:
+            y_true, y_pred = loss_focus(y_true, y_pred)
+        y_true_arr = y_true.numpy().squeeze()
+        y_pred_arr = y_pred.numpy().squeeze()
+        y_mask_mito = bool_interesting(y_true_arr)
+
+        # If we consider all cristae, mito and backgd
+        if len(gamma)==3:
+            y_mask_cristae = get_mask()
+
+        gamma_power = tf.where(y_mask_mito == True, gamma[0], gamma[1])
+        gamma_power = tf.reshape(gamma_power, y_true.shape)
+        maps = []
+
+        for batch_true, batch_pred in zip(y_true_arr, y_pred_arr):
+            p = ssim_maps(batch_true, batch_pred)
+            p = p.astype('float32')
+            maps.append(p)
+
+        maps = tf.convert_to_tensor(maps)
+        maps = tf.where(maps < 0, 0, maps)
+        maps = tf.reshape(maps, y_true.shape)
+        weighted_term = tf.math.pow((1 - maps), gamma_power)
+        return R(tf.math.multiply(K.abs(y_pred - y_true), weighted_term))
 
     return focal_cristae
 

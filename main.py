@@ -10,17 +10,17 @@ import datetime
 import cv2
 
 from csbdeep.utils import normalize, extract_zip_file
-from csbdeep.data import RawData, create_patches, create_patches_mito, no_background_patches, norm_percentiles, sample_percentiles, create_test_patches
+from csbdeep.data import RawData, create_patches, create_patches_mito, no_background_patches, no_background_patches_zscore
 from csbdeep.data.deteriorate import create_noised_inputs
 
-from csbdeep.utils import axes_dict, plot_some, plot_history, Path, download_and_extract_zip_file, save_figure, normalize_0_255
+from csbdeep.utils import axes_dict, plot_some, plot_history, Path, download_and_extract_zip_file, save_figure
 from csbdeep.io import load_training_data
 from csbdeep.models import Config, CARE
 from csbdeep.internals.losses import plot_multiple_ssim_maps
 from csbdeep.internals.predict import restore_and_eval_test, eval_metrics
 
 
-def launch(load, loss, transforms, epochs, spe):
+def launch(load, loss, transforms, epochs, spe, pred_patch):
     from csbdeep.data.transform import flip_vertical, flip_90, flip_180, flip_270, zoom_aug
 
     # -----------------------------
@@ -239,7 +239,10 @@ def launch(load, loss, transforms, epochs, spe):
     # -------- Testings and predictions -----------
     # ---------------------------------------------
     if predicting:
-        psnrs, ssims, psnrs_focus, ssims_focus, _, _, _, _ = restore_and_eval_test(model, 'YX', data_dir, moment)
+        if pred_patch == 3 or pred_patch == 1:
+            restore_and_eval_test(model, 'YX', data_dir, moment, patch_pred=True)
+        if pred_patch == 3 or pred_patch == 2:
+            restore_and_eval_test(model, 'YX', data_dir, moment, patch_pred=False)
 
 
     # -----------------------------------------------
@@ -306,16 +309,18 @@ if __name__ == '__main__':
     parser.add_argument("-e", action='store', dest='epochs', type=int, default=1)
     parser.add_argument("-spe", action='store', dest='steps_per_epoch', type=int, default=5)
     parser.add_argument("-f", action='store', dest='focus', type=bool, default=False)
+    parser.add_argument("-p", action='store', dest='pred_patch', type=int, default=2)  #1: yes 2:no 3:both
     args = parser.parse_args()
 
     if True:
-        launch(args.load, args.loss, args.tfm, args.epochs, args.steps_per_epoch)
+        launch(args.load, args.loss, args.tfm, args.epochs, args.steps_per_epoch, args.pred_patch)
 
-    # print std
     if False:
-        x = imread('data_mito/train/GT/IMG0003.STED.ome.tif')
-        x2 = (x - np.median(x)) / 3.7
-        cv2.imwrite('todelete/imagetest5.png', x2)
+        all_imgs = os.listdir('data_mito/test/low')
+        for img in all_imgs:
+            x = imread('data_mito/test/low/'+img)
+            name = img.split('.')[0]
+            no_background_patches_zscore()(x, name)
 
 
 

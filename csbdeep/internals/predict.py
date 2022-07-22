@@ -624,12 +624,13 @@ class Progress(object):
 #####################################################################################################################
 
 
-def restore_and_eval_test(keras_model, axes, data_dir, moment, patch_size=(128,128), verbose=True):
+def restore_and_eval_test(keras_model, axes, data_dir, moment, patch_size=(128, 128), patch_pred=False, verbose=True):
 
-    dir_pred = 'fig/' + moment + '/predict/'
+    dir_pred_patch = '' if patch_pred else '/predict_per_patch'
+    dir_pred = 'fig/' + moment + dir_pred_patch + '/predict/'
     create_dir(dir_pred)
     images_test = sorted(os.listdir(data_dir + '/test/low'))
-    create_dir('fig/' + moment + '/ssim_maps')
+    create_dir('fig/' + moment + dir_pred_patch + '/ssim_maps')
 
     psnrs, psnrs_focus = [], []
     ssims, ssims_focus = [], []
@@ -645,8 +646,10 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, patch_size=(128,1
         name_img = img.split('.')[0]
         x = imread(data_dir + '/test/low/' + img)
         y = imread(data_dir + '/test/GT/' + img)
-        #restored = keras_model.predict(x, axes)
-        restored = predict_per_patch(keras_model, x, axes, patch_size=patch_size, overlap=10)
+        if patch_pred:
+            restored = predict_per_patch(keras_model, x, axes, patch_size=patch_size, overlap=20)
+        else:
+            restored = keras_model.predict(x, axes)
 
         # Save SSIM maps
         maps = ssim_maps(restored, y)
@@ -662,7 +665,7 @@ def restore_and_eval_test(keras_model, axes, data_dir, moment, patch_size=(128,1
         psnrs_f_low, ssims_f_low = eval_metrics((y, x), focus=True)
         plt.suptitle(f"Low: PSNR: {round(psnrs_f_low[0], 2)} - SSIM: {round(ssims_f_low[0], 2)}\n"
                      f"Prediction: PSNR: {round(psnrs_f[0], 2)} - SSIM: {round(ssims_f[0], 2)}")
-        save_figure(moment, '1pred_' + str(name_img))
+        save_figure(moment + dir_pred_patch, '1pred_' + str(name_img))
         path_save = dir_pred + name_img + '.tif'
         cv2.imwrite(path_save, restored)
 
